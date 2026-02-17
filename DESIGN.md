@@ -8,8 +8,7 @@ Format-agnostic document tree library for Zig. The foundation that every format 
 
 ztree provides:
 - A `Node` tagged union representing any document structure
-- Builder functions to construct trees
-- Control flow helpers for conditional and list rendering (learned from gomponents)
+- Free functions to construct trees (`element`, `fragment`, `text`, `raw`, `elementVoid`, `attr`, `none`)
 - Tree traversal and transformation utilities
 - Render helpers for format module authors, including a callback-based tree walker (learned from goldmark)
 
@@ -17,10 +16,9 @@ It has zero opinions about HTML, Markdown, JSON, or any specific format. Format 
 
 ### Prior Art
 
-- **gomponents (Go):** `If()`, `Map()`, `Group` helpers for control flow. Opaque `Node` interface. We adopt the helpers but keep an inspectable tree.
-- **typed-html (Rust):** `VNode` enum (Text, UnsafeText, Element) — nearly identical to our `Node`. Validates our type design.
-- **goldmark (Go):** Per-node-kind renderer registration via callbacks. Clean AST/renderer separation. We adopt `renderWalk` with duck-typed `anytype` renderer.
-- **elem-go (Go):** Attrs as separate argument from children. `map[string]string` for attrs. Validates our decision to keep attrs separate and use a typed struct in format modules.
+- **typed-html (Rust):** `VNode` enum (Text, UnsafeText, Element) — validates our `Node` tagged union design.
+- **goldmark (Go):** Per-node-kind renderer registration via callbacks — adopted as `renderWalk` with duck-typed `anytype` renderer.
+- **elem-go (Go):** Attrs as separate argument from children — adopted: attrs and children are distinct parameters on `element()`.
 
 ---
 
@@ -58,37 +56,55 @@ Attr = struct {
 
 ---
 
-## Phase 1: Types and Builder
+## Phase 1: Types and Construction Functions
 
-Define the core types, the Builder struct, and free functions.
+Define the core types and free functions for building trees.
+
+### Design Decisions
+
+**No Builder struct.** An earlier design wrapped an `Allocator` in a `Builder` struct. This was dropped because idiomatic Zig passes allocators explicitly to each function that needs one — the same pattern used throughout `std`. Free functions with an `allocator` parameter make every allocation site visible and eliminate a type.
+
+**No `if_` helper.** An earlier design included `if_(condition, node) Node`. This was dropped because native Zig `if`/`else` is strictly more powerful — it handles optionals with payload capture, is familiar to every Zig developer, and adds zero API surface:
+
+```
+// Native Zig if — handles booleans, optionals, payload capture:
+try element(allocator, "div", &.{}, .{
+    if (user) |u| try profileCard(allocator, u) else none(),
+    if (show_sidebar) sidebar else none(),
+})
+```
+
+**No `map_` helper.** An earlier design included `map_(allocator, T, items, renderFn) !Node`. This was dropped because Zig has no closures — the render function can only use its single argument. The moment you need an allocator, an index, or any context, you need a `for` loop anyway. Idiomatic Zig:
+
+```
+// List rendering — explicit for loop:
+const items = try allocator.alloc(Node, data.len);
+for (data, 0..) |item, i| {
+    items[i] = try renderItem(allocator, item);
+}
+const list = try element(allocator, "ul", &.{}, items);
+```
 
 ### Critical Zig Constraint: Children Lifetime
 
 **Tested and confirmed:** Tuples passed to functions live on the callee's stack. Returning a `Node` with children pointing to a local tuple causes **segfaults at runtime** (dangling pointer). This was verified with Zig 0.15.2.
 
-**Solution:** The `Builder` struct carries an `Allocator`. At runtime, `element()` and `fragment()` allocate children arrays via the arena. At comptime (detected via `@inComptime()`), children arrays become static constants — no allocator needed.
+**Solution:** `element()` and `fragment()` take an `Allocator` parameter and branch on `@inComptime()`:
+- **Comptime:** `const arr: [N]Node = children; return .{ .children = &arr };` — static storage, allocator is `undefined` and never accessed.
+- **Runtime:** `const slice = try allocator.alloc(Node, N); ...` — arena allocation.
 
-Functions that don't create children arrays (`text`, `raw`, `none`, `elementVoid`, `attr`, `if_`) are free functions returning `Node` directly (not `!Node`).
+### Construction Functions
 
-### Builder Struct
+All functions are free functions in `src/constructors.zig`.
 
-```
-Builder = struct {
-    allocator: Allocator,
+**Functions that allocate** (take `Allocator`, return `!Node`):
 
-    fn init(allocator: Allocator) Builder
-    fn element(self, tag: []const u8, attrs: []const Attr, children: anytype) !Node
-    fn fragment(self, children: anytype) !Node
-}
-```
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `element` | `(allocator: Allocator, tag: []const u8, attrs: []const Attr, children: anytype) !Node` | Element node with children. Allocates children array at runtime. |
+| `fragment` | `(allocator: Allocator, children: anytype) !Node` | Fragment node (children without wrapper). Allocates children array at runtime. |
 
-`element()` and `fragment()` branch on `@inComptime()`:
-- **Comptime:** `const arr: [N]Node = children; return .{ .children = &arr };` — static storage.
-- **Runtime:** `const slice = try self.allocator.alloc(Node, N); ...` — arena allocation.
-
-At comptime, callers use `Builder.init(undefined)` — the allocator field is never accessed.
-
-### Free Functions (no allocator, return Node not !Node)
+**Functions that don't allocate** (no `Allocator`, return `Node` or `Attr`):
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -96,12 +112,11 @@ At comptime, callers use `Builder.init(undefined)` — the allocator field is ne
 | `raw` | `(content: []const u8) Node` | Raw node. Renderer passes it through. |
 | `elementVoid` | `(tag: []const u8, attrs: []const Attr) Node` | Element with no children. Empty static slice — no allocation. |
 | `attr` | `(key: []const u8, value: ?[]const u8) Attr` | Convenience for constructing an `Attr`. |
-| `none` | `() Node` | Empty node. Returns `Node{ .fragment = &.{} }`. Useful as else branch. |
-| `if_` | `(condition: bool, node: Node) Node` | Returns `node` when true, `none()` when false. Eagerly evaluated. |
+| `none` | `() Node` | Empty node. Returns `Node{ .fragment = &.{} }`. Useful as `else` branch. |
 
 ### Children Handling
 
-The `children` parameter on `Builder.element()` and `Builder.fragment()` accepts:
+The `children` parameter on `element()` and `fragment()` accepts:
 - A tuple of `Node` values: `.{ node1, node2, node3 }`
 - A slice: `[]const Node`
 
@@ -112,90 +127,34 @@ At comptime, tuples become static arrays. At runtime, tuples are copied into are
 - [ ] Define `Node` union type in `src/node.zig`
 - [ ] Define `Element` struct in `src/node.zig`
 - [ ] Define `Attr` struct in `src/node.zig`
-- [ ] Implement `Builder` struct in `src/builders.zig`
-- [ ] Implement `Builder.init()` — stores allocator
-- [ ] Implement `Builder.element()` — @inComptime branch, tuple-to-slice conversion
-- [ ] Implement `Builder.fragment()` — @inComptime branch, tuple-to-slice conversion
+- [ ] Implement `element()` in `src/constructors.zig` — @inComptime branch, tuple-to-slice conversion
+- [ ] Implement `fragment()` in `src/constructors.zig` — @inComptime branch, tuple-to-slice conversion
 - [ ] Implement `text()` — returns `Node{ .text = content }`
 - [ ] Implement `raw()` — returns `Node{ .raw = content }`
 - [ ] Implement `elementVoid()` — constructs element with `&.{}` children
 - [ ] Implement `attr()` — returns `Attr{ .key, .value }`
 - [ ] Implement `none()` — returns `Node{ .fragment = &.{} }`
-- [ ] Implement `if_()` — returns node or none based on condition
 - [ ] Test: `text()` stores content correctly
 - [ ] Test: `raw()` stores content correctly
-- [ ] Test: `Builder.fragment()` with tuple of nodes
-- [ ] Test: `Builder.fragment()` with empty tuple
-- [ ] Test: `Builder.element()` with tag, attrs, and children
-- [ ] Test: `Builder.element()` with no attrs (empty slice)
-- [ ] Test: `Builder.element()` with no children (empty tuple)
+- [ ] Test: `fragment()` with tuple of nodes
+- [ ] Test: `fragment()` with empty tuple
+- [ ] Test: `element()` with tag, attrs, and children
+- [ ] Test: `element()` with no attrs (empty slice)
+- [ ] Test: `element()` with no children (empty tuple)
 - [ ] Test: `elementVoid()` has zero children
 - [ ] Test: `attr()` with string value
 - [ ] Test: `attr()` with null value (boolean attribute)
 - [ ] Test: `none()` returns empty fragment
-- [ ] Test: `if_` with true condition returns the node
-- [ ] Test: `if_` with false condition returns none
 - [ ] Test: nested elements — 3+ levels deep
 - [ ] Test: mixed node types — element containing text, raw, fragment, and child elements
-- [ ] Test: all free functions work at comptime
-- [ ] Test: `Builder.init(undefined)` works at comptime
-- [ ] Test: `Builder.element()` works at comptime (static children)
-- [ ] Test: `Builder.element()` works at runtime with arena (no dangling pointers)
+- [ ] Test: all non-allocating functions work at comptime
+- [ ] Test: `element()` works at comptime with `undefined` allocator (static children)
+- [ ] Test: `element()` works at runtime with arena (no dangling pointers)
 - [ ] Test: component function returning `!Node` at runtime — children survive return
 
 ---
 
-## Phase 2: Control Flow Helpers
-
-Learned from gomponents: `Map` and conditional helpers are indispensable for real-world usage. These are format-agnostic and belong in the core.
-
-**`iff()` was dropped.** Zig has no closures — `fn() Node` cannot capture surrounding scope variables. Native Zig `if` expressions are more powerful, support payload capture, and are idiomatic:
-
-```
-// Native Zig if — preferred, handles optionals:
-h.div(.{}, .{
-    if (user) |u| try profileCard(b, u) else ztree.none(),
-})
-
-// if_ — convenience for simple booleans:
-h.div(.{}, .{
-    ztree.if_(show_sidebar, sidebar),
-})
-```
-
-### Builder.map_
-
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `Builder.map_` | `(self, comptime T: type, items: []const T, comptime renderFn: fn (T) Node) !Node` | Maps a slice to a fragment. Each item transformed via `renderFn`. Allocates children array. |
-
-`renderFn` is `comptime fn(T) Node` — covers the common case (no context needed). For cases requiring builder access or other context, use a `for` loop:
-
-```
-// Simple mapping (use map_):
-try b.map_([]const u8, &names, renderName)
-
-// Complex mapping (use for loop):
-const items = try arena.alloc(Node, data.len);
-for (data, 0..) |item, i| {
-    items[i] = try renderItem(b, item);
-}
-const list = try h.ul(.{}, items);
-```
-
-`none()` and `if_()` were moved to Phase 1 (free functions, no allocator needed).
-
-### Checklist
-
-- [ ] Implement `Builder.map_()` — maps slice through comptime function, returns fragment
-- [ ] Test: `map_` with empty slice returns empty fragment
-- [ ] Test: `map_` with items returns fragment with correct children
-- [ ] Test: `map_` preserves order
-- [ ] Test: `map_` composes inside element children
-
----
-
-## Phase 3: Tree Utilities
+## Phase 2: Tree Utilities
 
 Functions for inspecting and traversing trees. All operate on `Node` and are format-agnostic.
 
@@ -291,7 +250,7 @@ Note: transformations return **new** trees. Nodes are immutable once created.
 
 ---
 
-## Phase 4: Render Helpers
+## Phase 3: Render Helpers
 
 Shared utilities for format module authors building renderers. These are NOT renderers themselves — they are building blocks.
 
@@ -364,15 +323,14 @@ Benefits:
 
 ---
 
-## Phase 5: Comptime Validation
+## Phase 4: Comptime Validation
 
 Ensure everything works at compile time. This is critical — comptime is a core feature, not an afterthought.
 
 ### What Must Work at Comptime
 
-- All free functions: `text()`, `raw()`, `elementVoid()`, `attr()`, `none()`, `if_()`
-- `Builder.init(undefined)` — allocator never accessed at comptime
-- `Builder.element()` and `Builder.fragment()` — `@inComptime()` branch uses static arrays
+- All non-allocating functions: `text()`, `raw()`, `elementVoid()`, `attr()`, `none()`
+- `element(undefined, ...)` and `fragment(undefined, ...)` — `@inComptime()` branch uses static arrays, allocator is never accessed
 - All read-only utilities: `isEmpty()`, `countNodes()`, `depth()`, `children()`, `hasTag()`, `getAttr()`
 - Traversal: `walk()`, `find()` (when callback is comptime-known)
 - Escape: `comptimeEscape()`
@@ -381,20 +339,17 @@ Ensure everything works at compile time. This is critical — comptime is a core
 ### What Only Works at Runtime
 
 - `findAll()`, `map()`, `filter()`, `append()`, `prepend()`, `setAttr()`, `removeAttr()` — these allocate and need a runtime allocator
-- `Builder.map_()` — allocates a children slice, needs a runtime allocator
 - `writeEscaped()`, `writeRaw()`, `writeAttr()`, `writeAttrs()` — these write to `*std.io.Writer` (runtime only)
 
 ### Checklist
 
 - [ ] Verify: `text()` callable at comptime
 - [ ] Verify: `raw()` callable at comptime
-- [ ] Verify: `Builder.init(undefined)` at comptime
-- [ ] Verify: `Builder.fragment()` callable at comptime with tuple
-- [ ] Verify: `Builder.element()` callable at comptime with tuple children
+- [ ] Verify: `element(undefined, ...)` callable at comptime with tuple children
+- [ ] Verify: `fragment(undefined, ...)` callable at comptime with tuple
 - [ ] Verify: `elementVoid()` callable at comptime
 - [ ] Verify: `attr()` callable at comptime
 - [ ] Verify: `none()` callable at comptime
-- [ ] Verify: `if_()` callable at comptime
 - [ ] Verify: nested tree construction at comptime (5+ levels, using `catch unreachable`)
 - [ ] Verify: `isEmpty()` at comptime
 - [ ] Verify: `countNodes()` at comptime
@@ -419,21 +374,12 @@ ztree/
 ├── src/
 │   ├── root.zig            # Public API — re-exports everything
 │   ├── node.zig            # Node, Element, Attr type definitions
-│   ├── builders.zig        # Builder struct, text(), raw(), elementVoid(), attr(), none(), if_()
-│   ├── helpers.zig         # Builder.map_() — control flow helpers needing allocator
+│   ├── constructors.zig    # element(), fragment(), text(), raw(), elementVoid(), attr(), none()
 │   ├── walk.zig            # isEmpty, countNodes, depth, children, hasTag, getAttr,
 │   │                       # walk, walkDepth, find, findAll, findByTag
 │   ├── transform.zig       # map, filter, append, prepend, setAttr, removeAttr
 │   └── render.zig          # writeEscaped, writeRaw, comptimeEscape,
 │                           # writeAttr, writeAttrs, renderWalk (duck-typed)
-├── tests/
-│   ├── node_test.zig       # Type construction tests
-│   ├── builders_test.zig   # Builder function tests
-│   ├── helpers_test.zig    # Control flow helper tests
-│   ├── walk_test.zig       # Read-only utility and traversal tests
-│   ├── transform_test.zig  # Transformation function tests
-│   ├── render_test.zig     # Render helper tests
-│   └── comptime_test.zig   # All comptime verification tests
 └── README.md
 ```
 
@@ -448,16 +394,14 @@ Everything the user imports from `@import("ztree")`:
 - `Element`
 - `Attr`
 
-### Builder
-- `Builder` — struct with `init`, `element`, `fragment`, `map_` methods
-
-### Free Functions (no allocator)
-- `text`
-- `raw`
-- `elementVoid`
-- `attr`
-- `none`
-- `if_`
+### Construction Functions
+- `element` — element node with children (takes `Allocator`)
+- `fragment` — fragment node with children (takes `Allocator`)
+- `text` — text node (no allocator)
+- `raw` — raw node (no allocator)
+- `elementVoid` — element with no children (no allocator)
+- `attr` — attribute constructor (no allocator)
+- `none` — empty node (no allocator)
 
 ### Read-Only Utilities
 - `isEmpty`
@@ -497,15 +441,15 @@ Everything the user imports from `@import("ztree")`:
 ztree core is done when:
 
 - [ ] All types compile and work at both comptime and runtime
-- [ ] Builder struct works: `init`, `element`, `fragment`, `map_` — comptime and runtime
-- [ ] All free functions implemented and tested (`text`, `raw`, `none`, `elementVoid`, `attr`, `if_`)
+- [ ] All construction functions implemented and tested (`element`, `fragment`, `text`, `raw`, `elementVoid`, `attr`, `none`)
+- [ ] `element()` and `fragment()` work at comptime (with `undefined` allocator) and runtime (with arena)
 - [ ] Children lifetime verified: component functions returning `!Node` at runtime — no dangling pointers
 - [ ] All read-only utilities implemented and tested
 - [ ] All traversal functions implemented and tested
 - [ ] All transformation functions implemented and tested
 - [ ] All render helpers use `*std.io.Writer` and are tested
 - [ ] `renderWalk` with duck-typed renderer tested with two different mock renderers
-- [ ] All comptime verification tests pass (Builder.init(undefined) at comptime)
+- [ ] All comptime verification tests pass
 - [ ] README documents every public function with usage examples
 - [ ] `build.zig.zon` is valid and the package is importable by other projects
 - [ ] Zero dependencies beyond `std`
