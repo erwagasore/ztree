@@ -22,9 +22,15 @@ Add `ztree` as a dependency in your `build.zig.zon`, then import it:
 
 ```zig
 const ztree = @import("ztree");
-```
 
-TODO: add usage examples once Phase 1 is implemented.
+// Build a tree — no allocator needed for static content
+const tree = ztree.element("div", &.{ztree.attr("class", "container")}, &.{
+    ztree.text("Hello, "),
+    ztree.element("strong", &.{}, &.{
+        ztree.text("world"),
+    }),
+});
+```
 
 ## Structure
 
