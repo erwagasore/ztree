@@ -1,5 +1,4 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const node = @import("node.zig");
 pub const Node = node.Node;
 pub const Element = node.Element;
@@ -15,8 +14,8 @@ pub fn raw(content: []const u8) Node {
     return .{ .raw = content };
 }
 
-/// Construct an element with no children. Uses an empty static slice — no allocation.
-pub fn elementVoid(tag: []const u8, attrs: []const Attr) Node {
+/// Construct a closed element with no children. Uses an empty static slice — no allocation.
+pub fn closedElement(tag: []const u8, attrs: []const Attr) Node {
     return .{ .element = .{
         .tag = tag,
         .attrs = attrs,
@@ -35,56 +34,17 @@ pub fn none() Node {
 }
 
 /// Construct an element node with children.
-///
-/// `children` accepts a tuple of `Node` values or a `[]const Node` slice.
-/// At comptime the tuple becomes a static array (allocator is unused).
-/// At runtime the tuple is copied into an arena-allocated slice.
-pub fn element(allocator: Allocator, tag: []const u8, attrs: []const Attr, children: anytype) !Node {
-    const child_slice = try resolveChildren(allocator, children);
+pub fn element(tag: []const u8, attrs: []const Attr, children: []const Node) Node {
     return .{ .element = .{
         .tag = tag,
         .attrs = attrs,
-        .children = child_slice,
+        .children = children,
     } };
 }
 
 /// Construct a fragment node (children without a wrapping tag).
-///
-/// `children` accepts a tuple of `Node` values or a `[]const Node` slice.
-/// At comptime the tuple becomes a static array (allocator is unused).
-/// At runtime the tuple is copied into an arena-allocated slice.
-pub fn fragment(allocator: Allocator, children: anytype) !Node {
-    const child_slice = try resolveChildren(allocator, children);
-    return .{ .fragment = child_slice };
-}
-
-/// Resolve a children parameter (tuple or slice) into a `[]const Node`.
-fn resolveChildren(allocator: Allocator, children: anytype) ![]const Node {
-    const T = @TypeOf(children);
-
-    // Already a slice — use as-is (caller owns the memory).
-    if (T == []const Node) return children;
-
-    const info = @typeInfo(T);
-    if (info != .@"struct" or !info.@"struct".is_tuple) {
-        @compileError("children must be a tuple of Node values or a []const Node slice");
-    }
-
-    const N = info.@"struct".fields.len;
-    if (N == 0) return &.{};
-
-    if (@inComptime()) {
-        // Comptime: create a static array. Lives in the binary's constant data.
-        const arr: [N]Node = children;
-        return &arr;
-    } else {
-        // Runtime: copy into arena-allocated memory.
-        const slice = try allocator.alloc(Node, N);
-        inline for (0..N) |i| {
-            slice[i] = children[i];
-        }
-        return slice;
-    }
+pub fn fragment(children: []const Node) Node {
+    return .{ .fragment = children };
 }
 
 // ---------------------------------------------------------------------------
@@ -139,31 +99,27 @@ test "none returns empty fragment" {
     try testing.expectEqual(0, n.fragment.len);
 }
 
-// -- elementVoid --
+// -- closedElement --
 
-test "elementVoid has zero children" {
-    const n = elementVoid("br", &.{});
+test "closedElement has zero children" {
+    const n = closedElement("br", &.{});
     try testing.expectEqualStrings("br", n.element.tag);
     try testing.expectEqual(0, n.element.children.len);
     try testing.expectEqual(0, n.element.attrs.len);
 }
 
-test "elementVoid with attrs" {
+test "closedElement with attrs" {
     const attrs = [_]Attr{attr("src", "img.png")};
-    const n = elementVoid("img", &attrs);
+    const n = closedElement("img", &attrs);
     try testing.expectEqualStrings("img", n.element.tag);
     try testing.expectEqual(1, n.element.attrs.len);
     try testing.expectEqual(0, n.element.children.len);
 }
 
-// -- element (runtime with arena) --
+// -- element --
 
 test "element with tag, attrs, and children" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const n = try element(a, "div", &.{attr("id", "main")}, .{
+    const n = element("div", &.{attr("id", "main")}, &.{
         text("hello"),
     });
     try testing.expectEqualStrings("div", n.element.tag);
@@ -174,68 +130,44 @@ test "element with tag, attrs, and children" {
 }
 
 test "element with no attrs (empty slice)" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const n = try element(a, "p", &.{}, .{text("content")});
+    const n = element("p", &.{}, &.{text("content")});
     try testing.expectEqual(0, n.element.attrs.len);
     try testing.expectEqual(1, n.element.children.len);
 }
 
-test "element with no children (empty tuple)" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const n = try element(a, "div", &.{}, .{});
+test "element with no children (empty slice)" {
+    const n = element("div", &.{}, &.{});
     try testing.expectEqual(0, n.element.children.len);
 }
 
 test "element with slice children" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
     const kids = [_]Node{ text("a"), text("b") };
-    const n = try element(a, "ul", &.{}, @as([]const Node, &kids));
+    const n = element("ul", &.{}, &kids);
     try testing.expectEqual(2, n.element.children.len);
     try testing.expectEqualStrings("a", n.element.children[0].text);
     try testing.expectEqualStrings("b", n.element.children[1].text);
 }
 
-// -- fragment (runtime with arena) --
+// -- fragment --
 
-test "fragment with tuple of nodes" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const n = try fragment(a, .{ text("a"), text("b"), text("c") });
+test "fragment with nodes" {
+    const n = fragment(&.{ text("a"), text("b"), text("c") });
     try testing.expectEqual(.fragment, std.meta.activeTag(n));
     try testing.expectEqual(3, n.fragment.len);
     try testing.expectEqualStrings("b", n.fragment[1].text);
 }
 
-test "fragment with empty tuple" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const n = try fragment(a, .{});
+test "fragment with empty slice" {
+    const n = fragment(&.{});
     try testing.expectEqual(0, n.fragment.len);
 }
 
 // -- nested elements (3+ levels deep) --
 
 test "nested elements 3 levels deep" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const tree = try element(a, "html", &.{}, .{
-        try element(a, "body", &.{}, .{
-            try element(a, "div", &.{}, .{
+    const tree = element("html", &.{}, &.{
+        element("body", &.{}, &.{
+            element("div", &.{}, &.{
                 text("deep"),
             }),
         }),
@@ -251,16 +183,12 @@ test "nested elements 3 levels deep" {
 // -- mixed node types --
 
 test "mixed node types in one element" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const tree = try element(a, "div", &.{}, .{
+    const tree = element("div", &.{}, &.{
         text("escaped text"),
         raw("<hr/>"),
-        try fragment(a, .{text("in fragment")}),
-        try element(a, "span", &.{}, .{text("child")}),
-        elementVoid("br", &.{}),
+        fragment(&.{text("in fragment")}),
+        element("span", &.{}, &.{text("child")}),
+        closedElement("br", &.{}),
     });
 
     try testing.expectEqual(5, tree.element.children.len);
@@ -271,9 +199,9 @@ test "mixed node types in one element" {
     try testing.expectEqual(.element, std.meta.activeTag(tree.element.children[4]));
 }
 
-// -- comptime: all non-allocating functions --
+// -- comptime: all functions work at comptime --
 
-test "all non-allocating functions work at comptime" {
+test "all functions work at comptime" {
     comptime {
         const t = text("ct");
         if (!std.mem.eql(u8, t.text, "ct")) @compileError("text failed");
@@ -287,16 +215,26 @@ test "all non-allocating functions work at comptime" {
         const n = none();
         if (n.fragment.len != 0) @compileError("none failed");
 
-        const v = elementVoid("br", &.{});
-        if (!std.mem.eql(u8, v.element.tag, "br")) @compileError("elementVoid failed");
+        const v = closedElement("br", &.{});
+        if (!std.mem.eql(u8, v.element.tag, "br")) @compileError("closedElement failed");
+
+        const e = element("div", &.{}, &.{text("hello")});
+        if (!std.mem.eql(u8, e.element.tag, "div")) @compileError("element failed");
+        if (e.element.children.len != 1) @compileError("element children count");
+
+        const f = fragment(&.{ text("a"), text("b") });
+        if (f.fragment.len != 2) @compileError("fragment children count");
     }
 }
 
-// -- comptime: element() and fragment() with undefined allocator --
-
-test "element works at comptime with undefined allocator" {
+test "nested tree at comptime" {
     comptime {
-        const tree = comptimeElementHelper() catch unreachable;
+        const tree = element("div", &.{}, &.{
+            text("hello"),
+            element("span", &.{}, &.{
+                text("world"),
+            }),
+        });
         if (!std.mem.eql(u8, tree.element.tag, "div")) @compileError("tag mismatch");
         if (tree.element.children.len != 2) @compileError("children count mismatch");
         if (!std.mem.eql(u8, tree.element.children[0].text, "hello")) @compileError("child 0 mismatch");
@@ -304,37 +242,41 @@ test "element works at comptime with undefined allocator" {
     }
 }
 
-fn comptimeElementHelper() !Node {
-    return element(undefined, "div", &.{}, .{
-        text("hello"),
-        try element(undefined, "span", &.{}, .{
-            text("world"),
-        }),
-    });
-}
+// -- dynamic children with allocator --
 
-test "fragment works at comptime with undefined allocator" {
-    comptime {
-        const f = fragment(undefined, .{
-            text("a"),
-            text("b"),
-        }) catch unreachable;
-        if (f.fragment.len != 2) @compileError("fragment children count mismatch");
+test "dynamic children with arena allocator" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const data = [_][]const u8{ "one", "two", "three" };
+    const items = try a.alloc(Node, data.len);
+    for (data, 0..) |item, i| {
+        const li_kids = try a.alloc(Node, 1);
+        li_kids[0] = text(item);
+        items[i] = element("li", &.{}, li_kids);
     }
+    const list = element("ul", &.{}, items);
+
+    try testing.expectEqualStrings("ul", list.element.tag);
+    try testing.expectEqual(3, list.element.children.len);
+    try testing.expectEqualStrings("li", list.element.children[0].element.tag);
+    try testing.expectEqualStrings("one", list.element.children[0].element.children[0].text);
+    try testing.expectEqualStrings("three", list.element.children[2].element.children[0].text);
 }
 
-// -- runtime: children survive return (no dangling pointers) --
+// -- component function with dynamic children --
 
-fn buildComponent(allocator: Allocator) !Node {
-    return element(allocator, "section", &.{}, .{
-        text("line 1"),
-        try element(allocator, "p", &.{}, .{
-            text("line 2"),
-        }),
-    });
+fn buildComponent(a: std.mem.Allocator) !Node {
+    const p_kids = try a.alloc(Node, 1);
+    p_kids[0] = text("line 2");
+    const kids = try a.alloc(Node, 2);
+    kids[0] = text("line 1");
+    kids[1] = element("p", &.{}, p_kids);
+    return element("section", &.{}, kids);
 }
 
-test "component function returning !Node at runtime — children survive return" {
+test "component function returning Node — children survive return" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
@@ -344,25 +286,4 @@ test "component function returning !Node at runtime — children survive return"
     try testing.expectEqualStrings("line 1", section.element.children[0].text);
     try testing.expectEqualStrings("p", section.element.children[1].element.tag);
     try testing.expectEqualStrings("line 2", section.element.children[1].element.children[0].text);
-}
-
-fn buildDeep(allocator: Allocator) !Node {
-    return element(allocator, "l1", &.{}, .{
-        try element(allocator, "l2", &.{}, .{
-            try element(allocator, "l3", &.{}, .{
-                text("leaf"),
-            }),
-        }),
-    });
-}
-
-test "element works at runtime with arena — no dangling pointers" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    const tree = try buildDeep(arena.allocator());
-    try testing.expectEqualStrings("l1", tree.element.tag);
-    try testing.expectEqualStrings("l2", tree.element.children[0].element.tag);
-    try testing.expectEqualStrings("l3", tree.element.children[0].element.children[0].element.tag);
-    try testing.expectEqualStrings("leaf", tree.element.children[0].element.children[0].element.children[0].text);
 }
