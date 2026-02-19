@@ -32,6 +32,38 @@ const tree = ztree.element("div", &.{ztree.attr("class", "container")}, &.{
 });
 ```
 
+This produces the following in-memory tree:
+
+```
+Node.element
+ tag: "div"
+ attrs: [class="container"]
+ children:
+ ├── Node.text "Hello, "
+ └── Node.element
+      tag: "strong"
+      children:
+      └── Node.text "world"
+```
+
+ztree builds the tree — renderers produce the output. Each renderer walks the
+tree and decides the format:
+
+**ztree-html**
+```html
+<div class="container">Hello, <strong>world</strong></div>
+```
+
+**ztree-md**
+```md
+Hello, **world**
+```
+
+**ztree-json**
+```json
+{"tag":"div","attrs":{"class":"container"},"children":["Hello, ",{"tag":"strong","children":["world"]}]}
+```
+
 ## Structure
 
 See [AGENTS.md](AGENTS.md#repo-map) for the full repo map.
