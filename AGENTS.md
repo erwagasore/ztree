@@ -28,7 +28,6 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## Repo map
 
-- `DESIGN.md` — implementation checklist covering types, construction functions, tree utilities, render helpers, and comptime validation
 - `LICENSE` — MIT licence
 - `.gitignore` — Zig build artefacts exclusions
 - `build.zig` — Zig build configuration
