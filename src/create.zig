@@ -9,6 +9,12 @@ const Allocator = std.mem.Allocator;
 
 // ── Leaf constructors (no allocation) ────────────────────────────────────────
 
+/// Construct an Attr value. Useful when building a []const Attr slice at runtime.
+/// Boolean attributes have a null value; presence in the slice is enough.
+pub fn attr(key: []const u8, value: ?[]const u8) Attr {
+    return .{ .key = key, .value = value };
+}
+
 /// Construct a text node. The renderer escapes its content.
 pub fn text(content: []const u8) Node {
     return .{ .text = content };
