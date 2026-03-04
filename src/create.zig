@@ -91,7 +91,7 @@ fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
             }
             return buf;
         },
-        .pointer => return attrs, // []const Attr passthrough
+        .pointer => return @as([]const Attr, attrs), // []const Attr / *const [N]Attr passthrough
         else => @compileError("attrs must be an anonymous struct literal .{} or []const Attr"),
     }
 }
@@ -107,7 +107,7 @@ fn buildChildren(a: Allocator, children: anytype) ![]const Node {
             }
             return buf;
         },
-        .pointer => return children, // []const Node passthrough
+        .pointer => return @as([]const Node, children), // []const Node / *const [N]Node passthrough
         else => @compileError("children must be a tuple literal .{} or []const Node"),
     }
 }

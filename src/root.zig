@@ -10,6 +10,7 @@ pub const Attr    = create.Attr;
 pub const text = create.text;
 pub const raw  = create.raw;
 pub const none = create.none;
+pub const attr = create.attr; // kept for []const Attr slice construction
 
 // Element constructors — take an allocator, return !Node
 pub const element        = create.element;
