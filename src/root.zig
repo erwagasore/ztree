@@ -2,18 +2,19 @@
 const create = @import("create.zig");
 
 // Types
-pub const Node = create.Node;
+pub const Node    = create.Node;
 pub const Element = create.Element;
-pub const Attr = create.Attr;
+pub const Attr    = create.Attr;
 
-// Construction functions
-pub const element = create.element;
-pub const closedElement = create.closedElement;
-pub const fragment = create.fragment;
+// Leaf constructors — no allocation, safe anywhere
 pub const text = create.text;
-pub const raw = create.raw;
-pub const attr = create.attr;
+pub const raw  = create.raw;
 pub const none = create.none;
+
+// Element constructors — take an allocator, return !Node
+pub const element        = create.element;
+pub const closedElement  = create.closedElement;
+pub const fragment       = create.fragment;
 
 test {
     @import("std").testing.refAllDecls(@This());
