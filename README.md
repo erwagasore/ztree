@@ -313,6 +313,7 @@ Methods:
 | `deinit()` | Free scratch buffers (optional with arena). |
 | `open(tag, attrs)` | Push element. `attrs` accepts struct literal, `[]const Attr`, or `[]const ?Attr`. |
 | `close()` | Pop element, finalise children. Returns `error.ExtraClose` if nothing is open. |
+| `popRaw()` | Pop element without emitting a node. Returns `PopResult` (tag, attrs, children) for caller to inspect/transform. |
 | `text(content)` | Append text node (escaped by renderer). |
 | `raw(content)` | Append raw node (passed through as-is). |
 | `closedElement(tag, attrs)` | Append void element (no children). |

@@ -45,6 +45,13 @@ pub const TreeBuilder = struct {
         children_start: usize,
     };
 
+    /// Result of `popRaw` — the popped frame's metadata and finalized children.
+    pub const PopResult = struct {
+        tag: []const u8,
+        attrs: []const Attr,
+        children: []const Node,
+    };
+
     /// Initialise a new builder. All allocations go through `allocator`.
     /// Arena recommended — the tree and scratch buffers share the allocator.
     pub fn init(allocator: Allocator) TreeBuilder {
@@ -102,6 +109,36 @@ pub const TreeBuilder = struct {
                 .children = children,
             },
         });
+    }
+
+    /// Pop the current frame without emitting a node. Returns the frame's
+    /// tag, attrs, and finalized children so the caller can inspect, transform,
+    /// or discard them and manually emit via `text()`, `raw()`, `closedElement()`, etc.
+    ///
+    /// Use when a parser needs to intercept children at close time — e.g. collecting
+    /// alt text from an image span's children, then emitting a `closedElement` with
+    /// computed attrs instead of the normal element.
+    ///
+    /// Returns `error.ExtraClose` if no element is open.
+    pub fn popRaw(self: *TreeBuilder) !PopResult {
+        const frame = self.frames.pop() orelse return error.ExtraClose;
+        const start = frame.children_start;
+        const child_nodes = self.nodes.items[start..];
+
+        var children: []const Node = &.{};
+        if (child_nodes.len > 0) {
+            const buf = try self.allocator.alloc(Node, child_nodes.len);
+            @memcpy(buf, child_nodes);
+            children = buf;
+        }
+
+        self.nodes.shrinkRetainingCapacity(start);
+
+        return .{
+            .tag = frame.tag,
+            .attrs = frame.attrs,
+            .children = children,
+        };
     }
 
     /// Append a text node. The renderer escapes its content.
@@ -429,6 +466,119 @@ test "finish with deeply unclosed elements returns UnclosedElement" {
     try b.open("p", .{});
     try b.text("orphan");
     try testing.expectError(error.UnclosedElement, b.finish());
+}
+
+// -- popRaw --
+
+test "popRaw returns frame data without emitting node" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var b = TreeBuilder.init(arena.allocator());
+
+    try b.open("span", .{ .class = "img" });
+    try b.text("alt text here");
+    const f = try b.popRaw();
+
+    // Frame data is returned
+    try testing.expectEqualStrings("span", f.tag);
+    try testing.expectEqual(1, f.attrs.len);
+    try testing.expectEqualStrings("class", f.attrs[0].key);
+    try testing.expectEqual(1, f.children.len);
+    try testing.expectEqualStrings("alt text here", f.children[0].text);
+
+    // Nothing was emitted — builder is empty
+    try testing.expectEqual(0, b.depth());
+    const n = try b.finish();
+    try testing.expectEqual(.fragment, std.meta.activeTag(n));
+    try testing.expectEqual(0, n.fragment.len);
+}
+
+test "popRaw then emit transformed node" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var b = TreeBuilder.init(a);
+
+    // Simulate: parser opens an img span, adds alt text children,
+    // then intercepts at close to emit a closed <img> instead.
+    try b.open("div", .{});
+
+    try b.open("span", .{ .src = "photo.jpg" });
+    try b.text("A photo");
+    const f = try b.popRaw();
+
+    // Extract src from original attrs
+    const src = for (f.attrs) |attr| {
+        if (std.mem.eql(u8, attr.key, "src")) break attr.value orelse "";
+    } else "";
+
+    // Extract alt from children
+    var alt: []const u8 = "";
+    if (f.children.len > 0) {
+        if (f.children[0] == .text) alt = f.children[0].text;
+    }
+
+    // Emit a closed img element with computed attrs
+    const attrs = try a.alloc(Attr, 2);
+    attrs[0] = .{ .key = "src", .value = src };
+    attrs[1] = .{ .key = "alt", .value = alt };
+    try b.closedElement("img", attrs);
+
+    try b.close(); // div
+
+    const n = try b.finish();
+    try testing.expectEqualStrings("div", n.element.tag);
+    try testing.expectEqual(1, n.element.children.len);
+
+    const img = n.element.children[0].element;
+    try testing.expectEqualStrings("img", img.tag);
+    try testing.expectEqual(0, img.children.len);
+    try testing.expectEqual(2, img.attrs.len);
+    try testing.expectEqualStrings("src", img.attrs[0].key);
+    try testing.expectEqualStrings("photo.jpg", img.attrs[0].value.?);
+    try testing.expectEqualStrings("alt", img.attrs[1].key);
+    try testing.expectEqualStrings("A photo", img.attrs[1].value.?);
+}
+
+test "popRaw with no children returns empty slice" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var b = TreeBuilder.init(arena.allocator());
+
+    try b.open("span", .{});
+    const f = try b.popRaw();
+
+    try testing.expectEqualStrings("span", f.tag);
+    try testing.expectEqual(0, f.attrs.len);
+    try testing.expectEqual(0, f.children.len);
+}
+
+test "popRaw without open returns ExtraClose" {
+    var b = TreeBuilder.init(testing.allocator);
+    defer b.deinit();
+    try testing.expectError(error.ExtraClose, b.popRaw());
+}
+
+test "popRaw preserves parent frame" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var b = TreeBuilder.init(arena.allocator());
+
+    try b.open("div", .{});
+    try b.text("before");
+
+    try b.open("span", .{});
+    try b.text("inner");
+    _ = try b.popRaw(); // discard the span
+
+    try b.text("after");
+    try b.close(); // div
+
+    const n = try b.finish();
+    try testing.expectEqualStrings("div", n.element.tag);
+    try testing.expectEqual(2, n.element.children.len);
+    try testing.expectEqualStrings("before", n.element.children[0].text);
+    try testing.expectEqualStrings("after", n.element.children[1].text);
 }
 
 // -- round-trip: TreeBuilder output matches declarative API via renderWalk --
