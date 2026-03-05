@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] — 2026-03-05
+
+### Breaking Changes
+
+- Remove `cls()` from the public API. CSS class joining is format-specific; use a simple ternary or move the helper to `ztree-html`.
+
+### Other
+
+- Rewrite README quickstart: composable `navBar` component, optional attrs, boolean attrs, raw content, HTML/MD/JSON output samples.
+- Update AGENTS.md: repo map, core principles, rejected alternatives, and code examples for v0.2 API.
+
 ## [0.3.0] — 2026-03-05
 
 ### Features
