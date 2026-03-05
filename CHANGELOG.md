@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] — 2026-03-05
+
+### Breaking Changes
+
+- `element()`, `closedElement()`, and `fragment()` now take an `Allocator` and accept `anytype` for attrs and children — struct literals, tuples, and slices all work. Return type is `!Node`.
+
+### Features
+
+- Struct literal attrs: `.{ .class = "btn", .href = "/" }` — field names become attr keys, `{}` or `null` for boolean attrs.
+- Optional struct attrs: `.{ .style = if (cond) "value" else null }` — null omits the attr entirely.
+- `cls()` helper: joins non-null class name parts with spaces — `try cls(a, &.{ "btn", if (active) "active" else null })`.
+- `[]const ?Attr` slice support: `buildAttrs` filters out nulls, enabling `if (cond) attr("key", "val") else null` in attr slices.
+- Runnable examples: `examples/profile.zig` and `examples/storefront.zig` demonstrating nested elements, dynamic content, and conditional attrs.
+
+### Fixes
+
+- Export `attr()` constructor from public API.
+- Fix pointer passthrough coercion in `buildAttrs`.
+
+### Other
+
+- Remove DESIGN.md.
+- Add complete API reference and renderer output examples to README.
+
 ## [0.1.0] — 2026-02-19
 
 ### Breaking Changes
