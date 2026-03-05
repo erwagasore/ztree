@@ -1,5 +1,6 @@
 /// ztree — Format-agnostic document tree library for Zig.
 const create = @import("create.zig");
+const render = @import("render.zig");
 
 // Types
 pub const Node    = create.Node;
@@ -17,6 +18,9 @@ pub const cls  = create.cls;  // join optional class name parts into one string
 pub const element        = create.element;
 pub const closedElement  = create.closedElement;
 pub const fragment       = create.fragment;
+
+// Tree traversal
+pub const renderWalk = render.renderWalk;
 
 test {
     @import("std").testing.refAllDecls(@This());
