@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] — 2026-03-05
+
+### Features
+
+- Add `TreeBuilder.popRaw()` — pops the current frame without emitting a node, returning a `PopResult` with the tag, attrs, and finalized children. Enables parsers to intercept and transform children at close time (e.g. collecting alt text from image span children) without coupling to TreeBuilder internals.
+
 ## [0.5.0] — 2026-03-05
 
 ### Features
