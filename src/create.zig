@@ -15,6 +15,28 @@ pub fn attr(key: []const u8, value: ?[]const u8) Attr {
     return .{ .key = key, .value = value };
 }
 
+/// Join non-null class name parts into a single space-separated string.
+///
+///   const c = try cls(a, &.{ "btn", if (primary) "btn-primary" else null });
+///   // → "btn btn-primary"  or  "btn"
+///
+pub fn cls(a: Allocator, parts: []const ?[]const u8) ![]const u8 {
+    var total: usize = 0;
+    for (parts) |p| if (p) |s| {
+        if (total > 0) total += 1;
+        total += s.len;
+    };
+    if (total == 0) return "";
+    const buf = try a.alloc(u8, total);
+    var pos: usize = 0;
+    for (parts) |p| if (p) |s| {
+        if (pos > 0) { buf[pos] = ' '; pos += 1; }
+        @memcpy(buf[pos..][0..s.len], s);
+        pos += s.len;
+    };
+    return buf;
+}
+
 /// Construct a text node. The renderer escapes its content.
 pub fn text(content: []const u8) Node {
     return .{ .text = content };
@@ -37,6 +59,7 @@ pub fn none() Node {
 /// `attrs` — anonymous struct literal whose field names become attribute keys.
 ///   Use @"name" for attribute names that are not valid Zig identifiers.
 ///   Use {} (void) or null for boolean attributes (rendered as key only).
+///   Use if (cond) "value" else null for conditional attrs — null omits the attr.
 ///   Pass a []const Attr slice when attrs are built at runtime.
 ///
 /// `children` — tuple literal whose items become child nodes.
@@ -45,6 +68,7 @@ pub fn none() Node {
 ///   try element(a, "a", .{ .class = "btn", .href = "/" }, .{ text("Home") })
 ///   try element(a, "div", .{ .@"hx-get" = url }, arena_kids)
 ///   try element(a, "input", .{ .type = "checkbox", .checked = {} }, .{})
+///   try element(a, "li", .{ .@"aria-disabled" = if (off) "true" else null }, .{})
 ///
 pub fn element(a: Allocator, tag: []const u8, attrs: anytype, children: anytype) !Node {
     return .{ .element = .{
@@ -79,25 +103,57 @@ pub fn fragment(a: Allocator, children: anytype) !Node {
 
 // ── Private builders ──────────────────────────────────────────────────────────
 
+fn isOptionalAttrSlice(comptime T: type) bool {
+    const info = @typeInfo(T);
+    if (info != .pointer) return false;
+    const child = info.pointer.child;
+    if (child == ?Attr) return true; // []const ?Attr
+    const ci = @typeInfo(child);
+    return ci == .array and ci.array.child == ?Attr; // *const [N]?Attr
+}
+
 fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
     const T = @TypeOf(attrs);
     switch (@typeInfo(T)) {
         .@"struct" => |s| {
             if (s.fields.len == 0) return &.{};
             const buf = try a.alloc(Attr, s.fields.len);
-            inline for (s.fields, 0..) |f, i| {
+            var count: usize = 0;
+            inline for (s.fields) |f| {
                 const val = @field(attrs, f.name);
-                buf[i] = .{
-                    .key   = f.name,
-                    .value = switch (@typeInfo(@TypeOf(val))) {
-                        .void, .null => null,
-                        else         => @as([]const u8, val),
+                switch (@typeInfo(@TypeOf(val))) {
+                    .void, .null => {
+                        buf[count] = .{ .key = f.name, .value = null };
+                        count += 1;
                     },
-                };
+                    .optional => {
+                        if (val) |v| {
+                            buf[count] = .{ .key = f.name, .value = @as([]const u8, v) };
+                            count += 1;
+                        }
+                    },
+                    else => {
+                        buf[count] = .{ .key = f.name, .value = @as([]const u8, val) };
+                        count += 1;
+                    },
+                }
             }
-            return buf;
+            return buf[0..count];
         },
-        .pointer => return @as([]const Attr, attrs), // []const Attr / *const [N]Attr passthrough
+        .pointer => {
+            // []const ?Attr / *const [N]?Attr — skip nulls
+            if (comptime isOptionalAttrSlice(T)) {
+                const src: []const ?Attr = attrs;
+                var count: usize = 0;
+                for (src) |x| if (x != null) { count += 1; };
+                if (count == 0) return &.{};
+                const buf = try a.alloc(Attr, count);
+                var i: usize = 0;
+                for (src) |x| if (x) |v| { buf[i] = v; i += 1; };
+                return buf;
+            }
+            return @as([]const Attr, attrs); // []const Attr / *const [N]Attr passthrough
+        },
         else => @compileError("attrs must be an anonymous struct literal .{} or []const Attr"),
     }
 }
@@ -287,6 +343,87 @@ test "fragment empty" {
 
     const n = try fragment(arena.allocator(), .{});
     try testing.expectEqual(0, n.fragment.len);
+}
+
+// -- optional struct attr values --
+
+test "struct attr with optional value includes when non-null" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const n = try buildWithCond(arena.allocator(), true);
+    try testing.expectEqual(2, n.element.attrs.len);
+    try testing.expectEqualStrings("class", n.element.attrs[0].key);
+    try testing.expectEqualStrings("aria-disabled", n.element.attrs[1].key);
+    try testing.expectEqualStrings("true", n.element.attrs[1].value.?);
+}
+
+test "struct attr with optional value omits when null" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const n = try buildWithCond(arena.allocator(), false);
+    try testing.expectEqual(1, n.element.attrs.len);
+    try testing.expectEqualStrings("class", n.element.attrs[0].key);
+}
+
+/// Helper — keeps the condition runtime so Zig infers ?[]const u8, not @TypeOf(null).
+fn buildWithCond(a: std.mem.Allocator, cond: bool) !Node {
+    return element(a, "div", .{
+        .class = "card",
+        .@"aria-disabled" = if (cond) "true" else null,
+    }, .{});
+}
+
+test "boolean attr still works with void and null" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const n = try closedElement(arena.allocator(), "input", .{
+        .type = "checkbox",
+        .checked = {},
+        .disabled = null,
+    });
+    try testing.expectEqual(3, n.element.attrs.len);
+    try testing.expectEqual(null, n.element.attrs[1].value);
+    try testing.expectEqual(null, n.element.attrs[2].value);
+}
+
+// -- conditional ?Attr via if/else --
+
+test "element with []const ?Attr skips nulls" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const checked = true;
+    const disabled = false;
+    const n = try closedElement(a, "input", &[_]?Attr{
+        attr("type", "checkbox"),
+        if (checked) attr("checked", null) else null,
+        if (disabled) attr("disabled", null) else null,
+    });
+    try testing.expectEqual(2, n.element.attrs.len);
+    try testing.expectEqualStrings("type",    n.element.attrs[0].key);
+    try testing.expectEqualStrings("checked", n.element.attrs[1].key);
+}
+
+// -- cls --
+
+test "cls joins non-null parts" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const s = try cls(arena.allocator(), &.{ "btn", "btn-primary", null, "active" });
+    try testing.expectEqualStrings("btn btn-primary active", s);
+}
+
+test "cls all null returns empty string" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectEqualStrings("", try cls(arena.allocator(), &.{ null, null }));
+}
+
+test "cls single part no spaces" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectEqualStrings("foo", try cls(arena.allocator(), &.{ "foo", null }));
 }
 
 // -- nested elements --
