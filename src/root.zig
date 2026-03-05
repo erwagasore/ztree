@@ -11,6 +11,7 @@ pub const text = create.text;
 pub const raw  = create.raw;
 pub const none = create.none;
 pub const attr = create.attr; // kept for []const Attr slice construction
+pub const cls  = create.cls;  // join optional class name parts into one string
 
 // Element constructors — take an allocator, return !Node
 pub const element        = create.element;

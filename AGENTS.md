@@ -30,12 +30,15 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 
 - `LICENSE` — MIT licence
 - `.gitignore` — Zig build artefacts exclusions
-- `build.zig` — Zig build configuration
+- `build.zig` — Zig build configuration (library + examples + tests)
 - `build.zig.zon` — Zig package manifest
 - `src/` — library source
   - `root.zig` — public API re-exporting all modules
   - `node.zig` — `Node`, `Element`, `Attr` type definitions
-  - `create.zig` — construction functions: `element()`, `closedElement()`, `fragment()`, `text()`, `raw()`, `attr()`, `none()`
+  - `create.zig` — construction functions: `element()`, `closedElement()`, `fragment()`, `text()`, `raw()`, `attr()`, `cls()`, `none()`; `buildAttrs` with struct, `?Attr` slice, and optional value support
+- `examples/` — runnable example pages
+  - `profile.zig` — user profile page (`zig build profile`)
+  - `storefront.zig` — product storefront page (`zig build example`)
 - `docs/` — project documentation
 
 ## Merge strategy
@@ -55,6 +58,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 - **Entry point**: `src/root.zig` — public API re-exporting all modules.
 - **Domain**: format-agnostic document tree library for Zig. Provides `Node`/`Element`/`Attr` types, construction functions, tree traversal/transformation utilities, and render helpers for format module authors.
 - **Language**: Zig (0.15.x). Zero dependencies beyond `std`.
+- **Examples**: `examples/` — runnable pages demonstrating dynamic content, nested elements, conditional attrs, and `cls()`. Run with `zig build profile` or `zig build example`.
 
 ## Design principles
 
