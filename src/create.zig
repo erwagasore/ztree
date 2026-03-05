@@ -15,28 +15,6 @@ pub fn attr(key: []const u8, value: ?[]const u8) Attr {
     return .{ .key = key, .value = value };
 }
 
-/// Join non-null class name parts into a single space-separated string.
-///
-///   const c = try cls(a, &.{ "btn", if (primary) "btn-primary" else null });
-///   // → "btn btn-primary"  or  "btn"
-///
-pub fn cls(a: Allocator, parts: []const ?[]const u8) ![]const u8 {
-    var total: usize = 0;
-    for (parts) |p| if (p) |s| {
-        if (total > 0) total += 1;
-        total += s.len;
-    };
-    if (total == 0) return "";
-    const buf = try a.alloc(u8, total);
-    var pos: usize = 0;
-    for (parts) |p| if (p) |s| {
-        if (pos > 0) { buf[pos] = ' '; pos += 1; }
-        @memcpy(buf[pos..][0..s.len], s);
-        pos += s.len;
-    };
-    return buf;
-}
-
 /// Construct a text node. The renderer escapes its content.
 pub fn text(content: []const u8) Node {
     return .{ .text = content };
@@ -403,27 +381,6 @@ test "element with []const ?Attr skips nulls" {
     try testing.expectEqual(2, n.element.attrs.len);
     try testing.expectEqualStrings("type",    n.element.attrs[0].key);
     try testing.expectEqualStrings("checked", n.element.attrs[1].key);
-}
-
-// -- cls --
-
-test "cls joins non-null parts" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const s = try cls(arena.allocator(), &.{ "btn", "btn-primary", null, "active" });
-    try testing.expectEqualStrings("btn btn-primary active", s);
-}
-
-test "cls all null returns empty string" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    try testing.expectEqualStrings("", try cls(arena.allocator(), &.{ null, null }));
-}
-
-test "cls single part no spaces" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    try testing.expectEqualStrings("foo", try cls(arena.allocator(), &.{ "foo", null }));
 }
 
 // -- nested elements --

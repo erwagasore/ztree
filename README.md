@@ -39,58 +39,82 @@ const ztree = @import("ztree");
 ```zig
 const std = @import("std");
 const ztree = @import("ztree");
-const html = @import("ztree-html");
 
 const element = ztree.element;
 const closedElement = ztree.closedElement;
 const text = ztree.text;
+const raw = ztree.raw;
 const none = ztree.none;
-const cls = ztree.cls;
 
-fn page(a: std.mem.Allocator, logged_in: bool) !ztree.Node {
+// A function is a component — takes data, returns a Node.
+fn navBar(a: std.mem.Allocator, user: ?[]const u8) !ztree.Node {
+    return element(a, "nav", .{ .class = "topnav" }, .{
+        try element(a, "a", .{ .href = "/" }, .{text("Home")}),
+        if (user != null)
+            try element(a, "a", .{ .href = "/profile" }, .{text("Profile")})
+        else
+            none(),
+    });
+}
+
+fn page(a: std.mem.Allocator, user: ?[]const u8) !ztree.Node {
     return element(a, "html", .{ .lang = "en" }, .{
         try element(a, "head", .{}, .{
             try element(a, "title", .{}, .{text("My Site")}),
             try closedElement(a, "meta", .{ .charset = "utf-8" }),
         }),
         try element(a, "body", .{}, .{
-            try element(a, "nav", .{ .class = "topnav" }, .{
-                try element(a, "a", .{ .href = "/", .class = "nav-link" }, .{text("Home")}),
-                if (logged_in)
-                    try element(a, "a", .{ .href = "/profile" }, .{text("Profile")})
-                else
-                    none(),
-            }),
+            // composable — just call the function
+            try navBar(a, user),
             try element(a, "main", .{}, .{
                 try element(a, "h1", .{}, .{text("Welcome")}),
                 try element(a, "p", .{}, .{
-                    text("This is a "),
-                    try element(a, "strong", .{}, .{text("format-agnostic")}),
-                    text(" document tree."),
+                    text("Built with "),
+                    try element(a, "strong", .{}, .{text("ztree")}),
                 }),
+                // optional attr — null omits it entirely
+                try closedElement(a, "img", .{
+                    .src = "hero.jpg",
+                    .alt = "Hero",
+                    .loading = if (user != null) "eager" else null,
+                }),
+                // boolean attr — void value, no ="..."
+                try closedElement(a, "input", .{
+                    .type = "email",
+                    .required = {},
+                }),
+                // raw content — passed through without escaping
+                raw("<!-- analytics -->"),
             }),
         }),
     });
 }
-
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-
-    const tree = try page(a, true);
-
-    // Render to HTML — ztree-html walks the tree, writes output
-    var buf: std.ArrayList(u8) = .empty;
-    try html.render(tree, buf.writer(a));
-}
 ```
 
-This builds an in-memory tree. Renderers walk the tree and decide the format:
+One tree, multiple outputs. Renderer packages walk the tree and decide the format:
 
-**ztree-html** → `<h1>Welcome</h1><p>This is a <strong>format-agnostic</strong> document tree.</p>`
+**ztree-html**
+```html
+<html lang="en"><head><title>My Site</title><meta charset="utf-8"></head>
+<body><nav class="topnav"><a href="/">Home</a><a href="/profile">Profile</a></nav>
+<main><h1>Welcome</h1><p>Built with <strong>ztree</strong></p>
+<img src="hero.jpg" alt="Hero" loading="eager"><input type="email" required>
+<!-- analytics --></main></body></html>
+```
 
-**ztree-md** → `# Welcome\n\nThis is a **format-agnostic** document tree.`
+**ztree-md**
+```md
+# Welcome
+
+Built with **ztree**
+
+![Hero](hero.jpg)
+```
+
+**ztree-json**
+```json
+{"tag":"html","attrs":{"lang":"en"},"children":[...]}
+```
 
 ---
 
@@ -230,19 +254,6 @@ fn attr(key: []const u8, value: ?[]const u8) Attr
 Construct an attribute. Pass `null` for a boolean attribute. Used when
 building `[]const Attr` or `[]const ?Attr` slices at runtime.
 
-#### `cls`
-
-```zig
-fn cls(a: Allocator, parts: []const ?[]const u8) ![]const u8
-```
-
-Join non-null class name parts with spaces. Useful for conditional classes.
-
-```zig
-try cls(a, &.{ "btn", if (primary) "btn-primary" else null, if (active) "active" else null })
-// → "btn btn-primary active"  or  "btn"  or  "btn active"  etc.
-```
-
 #### `none`
 
 ```zig
@@ -278,10 +289,7 @@ fn navBar(a: Allocator, items: []const NavItem, active: []const u8) !Node {
     for (items, 0..) |item, i| {
         links[i] = try element(a, "a", .{
             .href = item.href,
-            .class = try cls(a, &.{
-                "nav-link",
-                if (std.mem.eql(u8, item.href, active)) "active" else null,
-            }),
+            .class = if (std.mem.eql(u8, item.href, active)) "nav-link active" else "nav-link",
         }, .{text(item.label)});
     }
     return element(a, "nav", .{ .class = "navbar" }, links);
