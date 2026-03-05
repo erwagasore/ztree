@@ -276,6 +276,54 @@ Walk a tree, calling `elementOpen`, `elementClose`, `onText`, `onRaw` on the
 renderer. Fragments are transparent. Used by format libraries internally —
 end users call the format library's render function instead.
 
+#### `TreeBuilder`
+
+Imperative tree builder — the producer-side counterpart to `renderWalk`.
+Parsers call `open`, `close`, `text`, `raw`, and `closedElement` to emit
+a stream of structural events. The builder assembles them into a `Node` tree.
+
+```zig
+var b = ztree.TreeBuilder.init(arena.allocator());
+defer b.deinit();
+
+try b.open("h1", .{});
+try b.text("Hello");
+try b.close();
+
+try b.open("p", .{});
+try b.text("World");
+try b.close();
+
+const tree = try b.finish();
+```
+
+`renderWalk` decomposes a tree into events (consumer side).
+`TreeBuilder` composes events into a tree (producer side).
+
+```
+renderWalk: Tree → events → format  (renderer implements callbacks)
+TreeBuilder: format → events → Tree  (parser calls methods)
+```
+
+Methods:
+
+| Method | Description |
+|--------|-------------|
+| `init(allocator)` | Create a builder. Arena recommended. |
+| `deinit()` | Free scratch buffers (optional with arena). |
+| `open(tag, attrs)` | Push element. `attrs` accepts struct literal, `[]const Attr`, or `[]const ?Attr`. |
+| `close()` | Pop element, finalise children. Returns `error.ExtraClose` if nothing is open. |
+| `text(content)` | Append text node (escaped by renderer). |
+| `raw(content)` | Append raw node (passed through as-is). |
+| `closedElement(tag, attrs)` | Append void element (no children). |
+| `finish()` | Return root node. Returns `error.UnclosedElement` if elements remain open. |
+| `depth()` | Current nesting depth. |
+
+Finish behaviour:
+- Zero root nodes → empty fragment (`none()`).
+- One root node → that node directly.
+- Multiple root nodes → fragment wrapping all roots.
+
 ---
 
 ## Dynamic content

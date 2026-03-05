@@ -81,7 +81,7 @@ pub fn fragment(a: Allocator, children: anytype) !Node {
 
 // ── Private builders ──────────────────────────────────────────────────────────
 
-fn isOptionalAttrSlice(comptime T: type) bool {
+pub fn isOptionalAttrSlice(comptime T: type) bool {
     const info = @typeInfo(T);
     if (info != .pointer) return false;
     const child = info.pointer.child;
@@ -90,7 +90,7 @@ fn isOptionalAttrSlice(comptime T: type) bool {
     return ci == .array and ci.array.child == ?Attr; // *const [N]?Attr
 }
 
-fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
+pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
     const T = @TypeOf(attrs);
     switch (@typeInfo(T)) {
         .@"struct" => |s| {
