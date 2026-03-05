@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] — 2026-03-05
+
+### Features
+
+- Add `TreeBuilder` — imperative tree builder for parser authors. Producer-side counterpart to `renderWalk`: parsers call `open`/`close`/`text`/`raw`/`closedElement` to emit structural events, and the builder assembles them into a `Node` tree. Includes `depth()` for nesting introspection and structural error detection (`ExtraClose`, `UnclosedElement`).
+
 ## [0.4.0] — 2026-03-05
 
 ### Breaking Changes
