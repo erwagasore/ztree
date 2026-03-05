@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] — 2026-03-05
+
+### Features
+
+- Add `renderWalk` — generic tree walker that dispatches to duck-typed renderer callbacks (`elementOpen`, `elementClose`, `onText`, `onRaw`). Fragments are transparent.
+
+### Other
+
+- Remove examples directory (examples belong in format library repos, not the core lib).
+- Rewrite README for v0.2 API: struct attrs, `cls()`, optional attrs, `renderWalk`, ecosystem links to ztree-html, ztree-md, ztree-parse-md.
+
 ## [0.2.0] — 2026-03-05
 
 ### Breaking Changes
