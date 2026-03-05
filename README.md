@@ -4,8 +4,11 @@ Format-agnostic document tree library for Zig. Zero dependencies beyond `std`.
 
 ztree provides types and construction functions for building document trees.
 It has no opinions about HTML, Markdown, JSON, or any specific format.
-Renderer packages (e.g. `ztree-html`, `ztree-md`, `ztree-json`) walk the tree
-and produce output.
+Renderer packages walk the tree and produce output:
+
+- [ztree-html](https://github.com/erwagasore/ztree-html) — HTML renderer
+- [ztree-md](https://github.com/erwagasore/ztree-md) — GFM Markdown renderer
+- [ztree-parse-md](https://github.com/erwagasore/ztree-parse-md) — Markdown parser → ztree tree
 
 ## Install
 
@@ -34,90 +37,60 @@ const ztree = @import("ztree");
 ## Quick example
 
 ```zig
+const std = @import("std");
 const ztree = @import("ztree");
+const html = @import("ztree-html");
+
 const element = ztree.element;
 const closedElement = ztree.closedElement;
-const fragment = ztree.fragment;
 const text = ztree.text;
-const raw = ztree.raw;
-const attr = ztree.attr;
 const none = ztree.none;
+const cls = ztree.cls;
 
-const logged_in = true;
-
-const page = element("html", &.{attr("lang", "en")}, &.{
-    element("head", &.{}, &.{
-        element("title", &.{}, &.{text("My Site")}),
-        closedElement("meta", &.{attr("charset", "utf-8")}),
-    }),
-    element("body", &.{}, &.{
-        element("nav", &.{attr("class", "topnav")}, &.{
-            element("a", &.{attr("href", "/")}, &.{text("Home")}),
-            if (logged_in)
-                element("a", &.{attr("href", "/profile")}, &.{text("Profile")})
-            else
-                none(),
+fn page(a: std.mem.Allocator, logged_in: bool) !ztree.Node {
+    return element(a, "html", .{ .lang = "en" }, .{
+        try element(a, "head", .{}, .{
+            try element(a, "title", .{}, .{text("My Site")}),
+            try closedElement(a, "meta", .{ .charset = "utf-8" }),
         }),
-        element("main", &.{}, &.{
-            element("h1", &.{}, &.{text("Welcome")}),
-            element("article", &.{attr("class", "post")}, &.{
-                element("p", &.{}, &.{
+        try element(a, "body", .{}, .{
+            try element(a, "nav", .{ .class = "topnav" }, .{
+                try element(a, "a", .{ .href = "/", .class = "nav-link" }, .{text("Home")}),
+                if (logged_in)
+                    try element(a, "a", .{ .href = "/profile" }, .{text("Profile")})
+                else
+                    none(),
+            }),
+            try element(a, "main", .{}, .{
+                try element(a, "h1", .{}, .{text("Welcome")}),
+                try element(a, "p", .{}, .{
                     text("This is a "),
-                    element("strong", &.{}, &.{text("format-agnostic")}),
+                    try element(a, "strong", .{}, .{text("format-agnostic")}),
                     text(" document tree."),
                 }),
-                raw("<!-- rendered from ztree -->"),
-                closedElement("hr", &.{}),
             }),
         }),
-        fragment(&.{
-            element("script", &.{attr("src", "app.js")}, &.{}),
-            element("script", &.{attr("src", "analytics.js")}, &.{}),
-        }),
-    }),
-});
+    });
+}
+
+pub fn main() !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const tree = try page(a, true);
+
+    // Render to HTML — ztree-html walks the tree, writes output
+    var buf: std.ArrayList(u8) = .empty;
+    try html.render(tree, buf.writer(a));
+}
 ```
 
-This builds an in-memory tree. ztree has no opinions about output —
-renderers walk the tree and decide the format:
+This builds an in-memory tree. Renderers walk the tree and decide the format:
 
-**ztree-html**
-```html
-<html lang="en">
-  <head>
-    <title>My Site</title>
-    <meta charset="utf-8">
-  </head>
-  <body>
-    <nav class="topnav">
-      <a href="/">Home</a>
-      <a href="/profile">Profile</a>
-    </nav>
-    <main>
-      <h1>Welcome</h1>
-      <article class="post">
-        <p>This is a <strong>format-agnostic</strong> document tree.</p>
-        <!-- rendered from ztree -->
-        <hr>
-      </article>
-    </main>
-    <script src="app.js"></script>
-    <script src="analytics.js"></script>
-  </body>
-</html>
-```
+**ztree-html** → `<h1>Welcome</h1><p>This is a <strong>format-agnostic</strong> document tree.</p>`
 
-**ztree-md**
-```md
-# Welcome
-
-This is a **format-agnostic** document tree.
-```
-
-**ztree-json**
-```json
-{"tag":"html","attrs":{"lang":"en"},"children":[{"tag":"head","children":["My Site"]}, ...]}
-```
+**ztree-md** → `# Welcome\n\nThis is a **format-agnostic** document tree.`
 
 ---
 
@@ -152,8 +125,7 @@ const Element = struct {
 
 #### `Attr`
 
-A key-value attribute. A `null` value represents a boolean attribute (key
-only, no value).
+A key-value attribute. A `null` value represents a boolean attribute (key only, no value).
 
 ```zig
 const Attr = struct {
@@ -166,40 +138,71 @@ const Attr = struct {
 
 ### Construction functions
 
-All construction functions are **pure** — data in, `Node` out, no side
-effects, no allocator. They all work at **comptime**.
+`element`, `closedElement`, and `fragment` take an `Allocator` and return `!Node`.
+Leaf constructors (`text`, `raw`, `none`, `attr`) are pure and need no allocator.
 
 #### `element`
 
 ```zig
-fn element(tag: []const u8, attrs: []const Attr, children: []const Node) Node
+fn element(a: Allocator, tag: []const u8, attrs: anytype, children: anytype) !Node
 ```
 
-Construct an element node with a tag, attributes, and children.
+Build an element node. Attrs can be a struct literal or a `[]const Attr` slice.
+Children can be a tuple or a `[]const Node` slice.
 
 ```zig
-const card = element("div", &.{attr("class", "card")}, &.{
-    element("h2", &.{}, &.{text("Title")}),
-    element("p", &.{}, &.{text("Body")}),
-});
+// Struct attrs — field names become attribute keys
+try element(a, "div", .{ .class = "card", .id = "main" }, .{
+    try element(a, "h2", .{}, .{text("Title")}),
+    try element(a, "p", .{}, .{text("Body")}),
+})
+
+// Boolean attrs with void
+try closedElement(a, "input", .{ .type = "checkbox", .checked = {} })
+
+// Non-identifier attr names with @""
+try element(a, "div", .{ .@"hx-get" = "/api", .@"aria-label" = "panel" }, .{})
+
+// Conditional attrs — null omits the attribute
+try element(a, "li", .{
+    .class = "item",
+    .@"aria-disabled" = if (disabled) "true" else null,
+}, .{text(label)})
+
+// Runtime attrs via []const Attr or []const ?Attr slice
+try element(a, "a", &[_]?Attr{
+    attr("href", url),
+    if (external) attr("target", "_blank") else null,
+}, .{text("Link")})
 ```
 
 #### `closedElement`
 
 ```zig
-fn closedElement(tag: []const u8, attrs: []const Attr) Node
+fn closedElement(a: Allocator, tag: []const u8, attrs: anytype) !Node
 ```
 
-Construct a self-closing element with no children. Uses an empty static
-slice internally — no allocation.
+Build a void/self-closing element (no children).
 
 ```zig
-const img = closedElement("img", &.{
-    attr("src", "photo.jpg"),
-    attr("alt", "A photo"),
-});
+try closedElement(a, "img", .{ .src = "photo.jpg", .alt = "A photo" })
+try closedElement(a, "br", .{})
+```
 
-const br = closedElement("br", &.{});
+#### `fragment`
+
+```zig
+fn fragment(a: Allocator, children: anytype) !Node
+```
+
+Build a fragment — children without a wrapping tag. Renderers treat
+fragments as transparent.
+
+```zig
+try fragment(a, .{
+    try element(a, "h1", .{}, .{text("Title")}),
+    try element(a, "p", .{}, .{text("Subtitle")}),
+})
 ```
 
 #### `text`
@@ -208,12 +211,7 @@ const br = closedElement("br", &.{});
 fn text(content: []const u8) Node
 ```
 
-Construct a text node. The **renderer** is responsible for escaping its
-content (e.g. `<` → `&lt;` in HTML). ztree stores it as-is.
-
-```zig
-const greeting = text("Hello, world!");
-```
+Construct a text node. The **renderer** escapes its content.
 
 #### `raw`
 
@@ -221,28 +219,7 @@ const greeting = text("Hello, world!");
 fn raw(content: []const u8) Node
 ```
 
-Construct a raw node. The renderer passes its content through **without
-escaping**. Use this for pre-escaped content or inline markup.
-
-```zig
-const icon = raw("<svg>...</svg>");
-```
-
-#### `fragment`
-
-```zig
-fn fragment(children: []const Node) Node
-```
-
-Construct a fragment — a list of children without a wrapping tag. Renderers
-treat fragments as transparent: they recurse into the children directly.
-
-```zig
-const header_content = fragment(&.{
-    element("h1", &.{}, &.{text("Title")}),
-    element("p", &.{}, &.{text("Subtitle")}),
-});
-```
+Construct a raw node. The renderer passes content through **without escaping**.
 
 #### `attr`
 
@@ -250,11 +227,20 @@ const header_content = fragment(&.{
 fn attr(key: []const u8, value: ?[]const u8) Attr
 ```
 
-Construct an attribute. Pass `null` for a boolean attribute (key only).
+Construct an attribute. Pass `null` for a boolean attribute. Used when
+building `[]const Attr` or `[]const ?Attr` slices at runtime.
+
+#### `cls`
 
 ```zig
-attr("class", "main")    // class="main"
-attr("disabled", null)   // disabled
+fn cls(a: Allocator, parts: []const ?[]const u8) ![]const u8
+```
+
+Join non-null class name parts with spaces. Useful for conditional classes.
+
+```zig
+try cls(a, &.{ "btn", if (primary) "btn-primary" else null, if (active) "active" else null })
+// → "btn btn-primary active"  or  "btn"  or  "btn active"  etc.
 ```
 
 #### `none`
@@ -266,59 +252,45 @@ fn none() Node
 Returns an empty fragment. Useful as the `else` branch in conditionals.
 
 ```zig
-element("div", &.{}, &.{
-    if (show_nav) nav_bar else none(),
-    main_content,
-});
+if (show_nav) try navbar(a) else none()
 ```
+
+#### `renderWalk`
+
+```zig
+fn renderWalk(renderer: anytype, node: Node) !void
+```
+
+Walk a tree, calling `elementOpen`, `elementClose`, `onText`, `onRaw` on the
+renderer. Fragments are transparent. Used by format libraries internally —
+end users call the format library's render function instead.
 
 ---
 
-## Children lifetime
+## Dynamic content
 
-Anonymous array literals (`&.{ ... }`) with comptime-known values live in
-static memory — no allocation needed:
-
-```zig
-// Static tree — all values known at comptime:
-const static_page = element("div", &.{}, &.{
-    element("h1", &.{}, &.{text("Hello")}),
-    closedElement("hr", &.{}),
-});
-```
-
-For runtime values, or when returning a `Node` from a function, children
-slices must be allocated so they outlive the scope. An arena allocator is the
-simplest approach — allocate everything, use the tree, free in one shot:
+For runtime values, children and attrs must outlive the function scope.
+Use an arena allocator — allocate everything, use the tree, free in one shot:
 
 ```zig
-fn profileCard(a: std.mem.Allocator, user: User) !ztree.Node {
-    const kids = try a.alloc(ztree.Node, 2);
-    kids[0] = element("h2", &.{}, &.{text(user.name)});
-    kids[1] = closedElement("img", &.{attr("src", user.avatar)});
-    return element("div", &.{attr("class", "card")}, kids);
+fn navBar(a: Allocator, items: []const NavItem, active: []const u8) !Node {
+    const links = try a.alloc(Node, items.len);
+    for (items, 0..) |item, i| {
+        links[i] = try element(a, "a", .{
+            .href = item.href,
+            .class = try cls(a, &.{
+                "nav-link",
+                if (std.mem.eql(u8, item.href, active)) "active" else null,
+            }),
+        }, .{text(item.label)});
+    }
+    return element(a, "nav", .{ .class = "navbar" }, links);
 }
 ```
 
-Any allocator works — the arena is a convenience, not a requirement.
+## Structure
 
----
-
-## Comptime
-
-All construction functions work at comptime. Static trees are embedded in
-the binary at zero runtime cost:
-
-```zig
-const layout = comptime element("html", &.{}, &.{
-    element("head", &.{}, &.{
-        element("title", &.{}, &.{text("My Site")}),
-    }),
-    element("body", &.{}, &.{
-        element("h1", &.{}, &.{text("Welcome")}),
-    }),
-});
-```
+See [AGENTS.md](AGENTS.md#repo-map) for the full repo map.
 
 ## License
 
