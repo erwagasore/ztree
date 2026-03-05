@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
         "src/node.zig",
         "src/create.zig",
         "src/render.zig",
+        "src/tree_builder.zig",
     };
 
     for (test_files) |test_file| {
