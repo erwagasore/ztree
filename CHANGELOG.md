@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] — 2026-03-06
+
+### Features
+
+- **Tuple attrs** — `buildAttrs` now accepts tuples of `Attr`/`?Attr` values, eliminating the verbose `&[_]?Attr{...}` syntax. Both static and dynamic attrs use the same `.{...}` wrapper:
+  ```zig
+  // Named struct — comptime keys (unchanged)
+  .{ .class = "btn", .href = "/" }
+
+  // Tuple — runtime keys, conditional attrs (new)
+  .{ attr("href", url), if (ext) attr("target", "_blank") else null }
+  ```
+  Handles bare `null` from comptime-known false conditions.
+
 ## [0.8.0] — 2026-03-06
 
 ### Features
