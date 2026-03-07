@@ -36,7 +36,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
   - `root.zig` — public API re-exporting all modules
   - `node.zig` — `Node`, `Element`, `Attr` type definitions
   - `create.zig` — construction functions: `element()`, `closedElement()`, `fragment()`, `text()`, `raw()`, `attr()`, `none()`; `buildAttrs` with struct literal, tuple, `?Attr` slice, and optional value support
-  - `render.zig` — `renderWalk()` generic tree walker for format library authors (consumer side)
+  - `render.zig` — `WalkAction`, `renderWalk()` generic tree walker for format library authors (consumer side)
   - `tree_builder.zig` — `TreeBuilder` imperative tree builder for parser authors (producer side)
   - `test_util.zig` — shared test utilities (`TraceRenderer`)
 - `docs/` — project documentation
@@ -73,7 +73,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 - **Explicit allocation, ergonomic construction.** `element()`, `closedElement()`, and `fragment()` take an `Allocator` to convert struct attrs and tuple children into slices. Same pattern as `std.fmt.allocPrint` — the caller owns the allocator, arena recommended. Leaf constructors (`text`, `raw`, `none`, `attr`) are pure and need no allocator. Trade-off: we gave up comptime tree construction (v0.1) for struct attrs (`.{ .class = "card" }`) and tuple children (`.{text("hi")}`).
 - **One way to do a thing.** No aliases, no overloads, no convenience wrappers that duplicate functionality. Follows Zig's design philosophy.
 - **Functions are components.** A function that takes data and returns `!Node` is a component. No traits, no registration, no framework — just call the function inside the tree. Composability comes from the language, not the library.
-- **Duck-typed renderer.** `renderWalk` accepts `anytype` — any struct with `elementOpen`, `elementClose`, `onText`, `onRaw` methods. Tree traversal is written once in ztree; format modules only implement the four callbacks. Renderers carry state (indentation, context) because they're structs, not function pointers. Fragment nodes are transparent — `renderWalk` recurses into children without calling any callback.
+- **Duck-typed renderer.** `renderWalk` accepts `anytype` — any struct with `elementOpen` (returns `WalkAction`), `elementClose`, `onText`, `onRaw` methods. Tree traversal is written once in ztree; format modules only implement the four callbacks. `elementOpen` returns `.@"continue"` for simple wrappers (free traversal) or `.skip_children` to handle an element entirely in `elementOpen` (no child recursion, no `elementClose` call). Renderers carry state (indentation, context) because they're structs, not function pointers. Fragment nodes are transparent — `renderWalk` recurses into children without calling any callback.
 - **Symmetric producer/consumer.** `renderWalk` (consumer) decomposes a tree into events. `TreeBuilder` (producer) composes events into a tree. Every renderer reuses `renderWalk`; every parser reuses `TreeBuilder`. Format-specific knowledge stays in format libraries.
 
 ### Rejected alternatives

@@ -22,6 +22,7 @@ pub const fragment       = create.fragment;
 
 // Tree traversal (consumer side)
 pub const renderWalk = render.renderWalk;
+pub const WalkAction = render.WalkAction;
 
 // Tree construction (producer side)
 pub const TreeBuilder = tree_builder.TreeBuilder;
