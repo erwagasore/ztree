@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
 
     const test_files = [_][]const u8{
+        "src/root.zig",
         "src/node.zig",
         "src/create.zig",
         "src/render.zig",

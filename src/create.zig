@@ -67,6 +67,7 @@ pub fn closedElement(a: Allocator, tag: []const u8, attrs: anytype) !Node {
         .tag      = tag,
         .attrs    = try buildAttrs(a, attrs),
         .children = &.{},
+        .closed   = true,
     } };
 }
 
@@ -81,7 +82,7 @@ pub fn fragment(a: Allocator, children: anytype) !Node {
 
 // ── Private builders ──────────────────────────────────────────────────────────
 
-pub fn isOptionalAttrSlice(comptime T: type) bool {
+fn isOptionalAttrSlice(comptime T: type) bool {
     const info = @typeInfo(T);
     if (info != .pointer) return false;
     const child = info.pointer.child;
@@ -90,6 +91,10 @@ pub fn isOptionalAttrSlice(comptime T: type) bool {
     return ci == .array and ci.array.child == ?Attr; // *const [N]?Attr
 }
 
+/// Convert attrs (struct literal, `[]const Attr`, or `[]const ?Attr`) into a
+/// `[]const Attr` slice. When struct fields contain optional values that resolve
+/// to `null`, the allocated buffer may have unused trailing capacity — harmless
+/// with arena allocators (recommended).
 pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
     const T = @TypeOf(attrs);
     switch (@typeInfo(T)) {

@@ -38,6 +38,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
   - `create.zig` — construction functions: `element()`, `closedElement()`, `fragment()`, `text()`, `raw()`, `attr()`, `none()`; `buildAttrs` with struct, `?Attr` slice, and optional value support
   - `render.zig` — `renderWalk()` generic tree walker for format library authors (consumer side)
   - `tree_builder.zig` — `TreeBuilder` imperative tree builder for parser authors (producer side)
+  - `test_util.zig` — shared test utilities (`TraceRenderer`)
 - `docs/` — project documentation
 
 ## Merge strategy

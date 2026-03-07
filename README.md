@@ -144,8 +144,13 @@ const Element = struct {
     tag: []const u8,
     attrs: []const Attr,
     children: []const Node,
+    closed: bool = false,   // true for void/self-closing elements
 };
 ```
+
+When `closed` is `true` (set by `closedElement`), `renderWalk` calls `elementOpen`
+only — no children are visited and `elementClose` is not called. Renderers can
+inspect `el.closed` to choose self-closing syntax (e.g. `<br>` vs `<br></br>`).
 
 #### `Attr`
 
@@ -319,6 +324,7 @@ Methods:
 | `closedElement(tag, attrs)` | Append void element (no children). |
 | `finish()` | Return root node. Returns `error.UnclosedElement` if elements remain open. |
 | `depth()` | Current nesting depth. |
+| `reset()` | Clear all state, retaining capacity for reuse. |
 
 Finish behaviour:
 - Zero root nodes → empty fragment (`none()`).

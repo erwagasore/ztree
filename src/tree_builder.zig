@@ -45,6 +45,9 @@ pub const TreeBuilder = struct {
         children_start: usize,
     };
 
+    /// Errors specific to tree-building operations (excludes `Allocator.Error`).
+    pub const Error = error{ ExtraClose, UnclosedElement };
+
     /// Result of `popRaw` — the popped frame's metadata and finalized children.
     pub const PopResult = struct {
         tag: []const u8,
@@ -68,6 +71,13 @@ pub const TreeBuilder = struct {
     pub fn deinit(self: *TreeBuilder) void {
         self.nodes.deinit(self.allocator);
         self.frames.deinit(self.allocator);
+    }
+
+    /// Clear all state, retaining allocated capacity for reuse.
+    /// Only useful with non-arena allocators — with arena, just init a new builder.
+    pub fn reset(self: *TreeBuilder) void {
+        self.nodes.clearRetainingCapacity();
+        self.frames.clearRetainingCapacity();
     }
 
     /// Push a new element onto the stack. Children added after this call
@@ -160,6 +170,7 @@ pub const TreeBuilder = struct {
                 .tag = tag,
                 .attrs = try create.buildAttrs(self.allocator, attrs),
                 .children = &.{},
+                .closed = true,
             },
         });
     }
@@ -195,7 +206,9 @@ pub const TreeBuilder = struct {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
-const renderWalk = @import("render.zig").renderWalk;
+const render = @import("render.zig");
+const renderWalk = render.renderWalk;
+const TraceRenderer = @import("test_util.zig").TraceRenderer;
 
 // -- finish edge cases --
 
@@ -468,6 +481,45 @@ test "finish with deeply unclosed elements returns UnclosedElement" {
     try testing.expectError(error.UnclosedElement, b.finish());
 }
 
+// -- reset --
+
+test "reset clears state for reuse" {
+    var b = TreeBuilder.init(testing.allocator);
+    defer b.deinit();
+
+    try b.text("first");
+    const n1 = try b.finish();
+    try testing.expectEqualStrings("first", n1.text);
+
+    b.reset();
+
+    try b.text("second");
+    const n2 = try b.finish();
+    try testing.expectEqualStrings("second", n2.text);
+}
+
+test "reset clears open frames" {
+    var b = TreeBuilder.init(testing.allocator);
+    defer b.deinit();
+
+    try b.open("div", .{});
+    try testing.expectEqual(1, b.depth());
+
+    b.reset();
+
+    try testing.expectEqual(0, b.depth());
+    const n = try b.finish();
+    try testing.expectEqual(0, n.fragment.len);
+}
+
+// -- Error type --
+
+test "Error set contains ExtraClose and UnclosedElement" {
+    // Verify the named error set matches the actual errors.
+    const E = TreeBuilder.Error;
+    try testing.expectEqual(E, error{ ExtraClose, UnclosedElement });
+}
+
 // -- popRaw --
 
 test "popRaw returns frame data without emitting node" {
@@ -582,57 +634,6 @@ test "popRaw preserves parent frame" {
 }
 
 // -- round-trip: TreeBuilder output matches declarative API via renderWalk --
-
-/// Minimal renderer that records callbacks as a string (same as render.zig tests).
-const TraceRenderer = struct {
-    buf: std.ArrayList(u8),
-    gpa: Allocator,
-
-    fn init(gpa: Allocator) TraceRenderer {
-        return .{ .buf = .empty, .gpa = gpa };
-    }
-
-    fn deinit(self: *TraceRenderer) void {
-        self.buf.deinit(self.gpa);
-    }
-
-    fn result(self: *TraceRenderer) []const u8 {
-        return self.buf.items;
-    }
-
-    fn append(self: *TraceRenderer, s: []const u8) !void {
-        try self.buf.appendSlice(self.gpa, s);
-    }
-
-    pub fn elementOpen(self: *TraceRenderer, el: Element) !void {
-        try self.append("<");
-        try self.append(el.tag);
-        for (el.attrs) |a| {
-            try self.append(" ");
-            try self.append(a.key);
-            if (a.value) |v| {
-                try self.append("=\"");
-                try self.append(v);
-                try self.append("\"");
-            }
-        }
-        try self.append(">");
-    }
-
-    pub fn elementClose(self: *TraceRenderer, el: Element) !void {
-        try self.append("</");
-        try self.append(el.tag);
-        try self.append(">");
-    }
-
-    pub fn onText(self: *TraceRenderer, content: []const u8) !void {
-        try self.append(content);
-    }
-
-    pub fn onRaw(self: *TraceRenderer, content: []const u8) !void {
-        try self.append(content);
-    }
-};
 
 fn renderToString(gpa: Allocator, n: Node) ![]const u8 {
     var r = TraceRenderer.init(gpa);
@@ -765,7 +766,7 @@ test "round-trip: document with attrs and nesting" {
 
     try testing.expectEqualStrings(decl_html, built_html);
     try testing.expectEqualStrings(
-        "<html lang=\"en\"><head><title>Test</title><meta charset=\"utf-8\"></meta></head><body><h1>Hello</h1></body></html>",
+        "<html lang=\"en\"><head><title>Test</title><meta charset=\"utf-8\"></head><body><h1>Hello</h1></body></html>",
         built_html,
     );
 }

@@ -9,6 +9,9 @@ pub const Element = struct {
     tag: []const u8,
     attrs: []const Attr,
     children: []const Node,
+    /// True for void/self-closing elements created via `closedElement()`.
+    /// When true, `renderWalk` calls `elementOpen` only — no children, no `elementClose`.
+    closed: bool = false,
 };
 
 pub const Node = union(enum) {
