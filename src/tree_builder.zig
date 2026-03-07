@@ -99,24 +99,12 @@ pub const TreeBuilder = struct {
     ///
     /// Returns `error.ExtraClose` if no element is open.
     pub fn close(self: *TreeBuilder) !void {
-        const frame = self.frames.pop() orelse return error.ExtraClose;
-        const start = frame.children_start;
-        const child_nodes = self.nodes.items[start..];
-
-        var children: []const Node = &.{};
-        if (child_nodes.len > 0) {
-            const buf = try self.allocator.alloc(Node, child_nodes.len);
-            @memcpy(buf, child_nodes);
-            children = buf;
-        }
-
-        self.nodes.shrinkRetainingCapacity(start);
-
+        const f = try self.popFrame();
         try self.nodes.append(self.allocator, .{
             .element = .{
-                .tag = frame.tag,
-                .attrs = frame.attrs,
-                .children = children,
+                .tag = f.tag,
+                .attrs = f.attrs,
+                .children = f.children,
             },
         });
     }
@@ -131,6 +119,12 @@ pub const TreeBuilder = struct {
     ///
     /// Returns `error.ExtraClose` if no element is open.
     pub fn popRaw(self: *TreeBuilder) !PopResult {
+        return self.popFrame();
+    }
+
+    /// Shared frame-popping logic for `close()` and `popRaw()`.
+    /// Pops the top frame, finalises its children, and returns the result.
+    fn popFrame(self: *TreeBuilder) !PopResult {
         const frame = self.frames.pop() orelse return error.ExtraClose;
         const start = frame.children_start;
         const child_nodes = self.nodes.items[start..];
@@ -173,6 +167,12 @@ pub const TreeBuilder = struct {
                 .closed = true,
             },
         });
+    }
+
+    /// Append a pre-built node. Useful when injecting a node produced by
+    /// a sub-parser, cache, or any other source.
+    pub fn addNode(self: *TreeBuilder, node: Node) !void {
+        try self.nodes.append(self.allocator, node);
     }
 
     /// Finalise the tree and return the root node.
@@ -518,6 +518,55 @@ test "Error set contains ExtraClose and UnclosedElement" {
     // Verify the named error set matches the actual errors.
     const E = TreeBuilder.Error;
     try testing.expectEqual(E, error{ ExtraClose, UnclosedElement });
+}
+
+// -- addNode --
+
+test "addNode injects pre-built node at current level" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var b = TreeBuilder.init(a);
+
+    try b.open("div", .{});
+    try b.text("before");
+
+    // Build a node externally and inject it
+    const sub = try create.element(a, "span", .{ .class = "injected" }, .{create.text("hi")});
+    try b.addNode(sub);
+
+    try b.text("after");
+    try b.close();
+
+    const n = try b.finish();
+    try testing.expectEqualStrings("div", n.element.tag);
+    try testing.expectEqual(3, n.element.children.len);
+    try testing.expectEqualStrings("before", n.element.children[0].text);
+    try testing.expectEqualStrings("span", n.element.children[1].element.tag);
+    try testing.expectEqualStrings("after", n.element.children[2].text);
+}
+
+test "addNode as root" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var b = TreeBuilder.init(arena.allocator());
+    try b.addNode(create.text("standalone"));
+    const n = try b.finish();
+    try testing.expectEqualStrings("standalone", n.text);
+}
+
+test "addNode with closed element preserves closed flag" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var b = TreeBuilder.init(a);
+
+    const img = try create.closedElement(a, "img", .{ .src = "photo.jpg" });
+    try b.addNode(img);
+
+    const n = try b.finish();
+    try testing.expect(n.element.closed);
+    try testing.expectEqualStrings("img", n.element.tag);
 }
 
 // -- popRaw --

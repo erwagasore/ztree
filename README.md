@@ -322,6 +322,7 @@ Methods:
 | `text(content)` | Append text node (escaped by renderer). |
 | `raw(content)` | Append raw node (passed through as-is). |
 | `closedElement(tag, attrs)` | Append void element (no children). |
+| `addNode(node)` | Append a pre-built `Node` (from a sub-parser, cache, etc.). |
 | `finish()` | Return root node. Returns `error.UnclosedElement` if elements remain open. |
 | `depth()` | Current nesting depth. |
 | `reset()` | Clear all state, retaining capacity for reuse. |
