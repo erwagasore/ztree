@@ -274,6 +274,22 @@ Returns an empty fragment. Useful as the `else` branch in conditionals.
 if (show_nav) try navbar(a) else none()
 ```
 
+#### `WalkAction`
+
+```zig
+const WalkAction = enum { @"continue", skip_children };
+```
+
+Returned by `elementOpen` to control tree traversal:
+
+- `.@"continue"` — `renderWalk` recurses into children, then calls `elementClose`.
+- `.skip_children` — `renderWalk` skips children and `elementClose`. The renderer
+  handled this element completely in `elementOpen`.
+
+Simple wrapper elements (bold, headings) return `.@"continue"` and get free
+traversal. Complex elements (tables, code blocks) return `.skip_children` and
+handle children directly from the `Element` struct.
+
 #### `renderWalk`
 
 ```zig
@@ -283,6 +299,15 @@ fn renderWalk(renderer: anytype, node: Node) !void
 Walk a tree, calling `elementOpen`, `elementClose`, `onText`, `onRaw` on the
 renderer. Fragments are transparent. Used by format libraries internally —
 end users call the format library's render function instead.
+
+The renderer must implement:
+
+```zig
+fn elementOpen(self, el: Element) !WalkAction
+fn elementClose(self, el: Element) !void
+fn onText(self, content: []const u8) !void
+fn onRaw(self, content: []const u8) !void
+```
 
 #### `TreeBuilder`
 

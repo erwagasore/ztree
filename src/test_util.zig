@@ -1,7 +1,9 @@
 const std = @import("std");
 const node = @import("node.zig");
+const render = @import("render.zig");
 
 const Element = node.Element;
+const WalkAction = render.WalkAction;
 const Allocator = std.mem.Allocator;
 
 /// Minimal test renderer that records callback invocations as a string.
@@ -26,7 +28,7 @@ pub const TraceRenderer = struct {
         try self.buf.appendSlice(self.gpa, s);
     }
 
-    pub fn elementOpen(self: *TraceRenderer, el: Element) !void {
+    pub fn elementOpen(self: *TraceRenderer, el: Element) !WalkAction {
         try self.append("<");
         try self.append(el.tag);
         for (el.attrs) |a| {
@@ -39,6 +41,7 @@ pub const TraceRenderer = struct {
             }
         }
         try self.append(">");
+        return .@"continue";
     }
 
     pub fn elementClose(self: *TraceRenderer, el: Element) !void {
