@@ -12,7 +12,8 @@ pub const Attr    = create.Attr;
 pub const text = create.text;
 pub const raw  = create.raw;
 pub const none = create.none;
-pub const attr = create.attr; // kept for []const Attr slice construction
+/// Construct individual attributes for runtime `[]const Attr` or `[]const ?Attr` slices.
+pub const attr = create.attr;
 
 // Element constructors — take an allocator, return !Node
 pub const element        = create.element;

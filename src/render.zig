@@ -16,6 +16,13 @@ const Element = node.Element;
 /// Fragment nodes are transparent — `renderWalk` recurses into their
 /// children without calling any callback.
 ///
+/// Closed elements (`el.closed == true`, created via `closedElement`) receive
+/// only an `elementOpen` call — children are skipped and `elementClose` is
+/// not called. Renderers can inspect `el.closed` to choose self-closing syntax.
+///
+/// Note: traversal is recursive. Extremely deep trees (thousands of levels)
+/// may overflow the call stack.
+///
 /// Example:
 ///
 ///   var r = MyHtmlRenderer.init(allocator);
@@ -39,8 +46,10 @@ fn callRenderer(renderer: anytype, n: Node) !void {
         },
         .element => |el| {
             try renderer.elementOpen(el);
-            for (el.children) |child| try callRenderer(renderer, child);
-            try renderer.elementClose(el);
+            if (!el.closed) {
+                for (el.children) |child| try callRenderer(renderer, child);
+                try renderer.elementClose(el);
+            }
         },
     }
 }
@@ -56,57 +65,7 @@ const fragment = create.fragment;
 const text = create.text;
 const raw = create.raw;
 const none = create.none;
-
-/// Minimal test renderer that records callback invocations as a string.
-const TraceRenderer = struct {
-    buf: std.ArrayList(u8),
-    gpa: Allocator,
-
-    fn init(gpa: Allocator) TraceRenderer {
-        return .{ .buf = .empty, .gpa = gpa };
-    }
-
-    fn deinit(self: *TraceRenderer) void {
-        self.buf.deinit(self.gpa);
-    }
-
-    fn result(self: *TraceRenderer) []const u8 {
-        return self.buf.items;
-    }
-
-    fn append(self: *TraceRenderer, s: []const u8) !void {
-        try self.buf.appendSlice(self.gpa, s);
-    }
-
-    pub fn elementOpen(self: *TraceRenderer, el: Element) !void {
-        try self.append("<");
-        try self.append(el.tag);
-        for (el.attrs) |a| {
-            try self.append(" ");
-            try self.append(a.key);
-            if (a.value) |v| {
-                try self.append("=\"");
-                try self.append(v);
-                try self.append("\"");
-            }
-        }
-        try self.append(">");
-    }
-
-    pub fn elementClose(self: *TraceRenderer, el: Element) !void {
-        try self.append("</");
-        try self.append(el.tag);
-        try self.append(">");
-    }
-
-    pub fn onText(self: *TraceRenderer, content: []const u8) !void {
-        try self.append(content);
-    }
-
-    pub fn onRaw(self: *TraceRenderer, content: []const u8) !void {
-        try self.append(content);
-    }
-};
+const TraceRenderer = @import("test_util.zig").TraceRenderer;
 
 test "renderWalk text node" {
     var r = TraceRenderer.init(testing.allocator);
@@ -137,7 +96,7 @@ test "renderWalk element with children" {
     try testing.expectEqualStrings("<div class=\"card\">hello</div>", r.result());
 }
 
-test "renderWalk closed element calls open and close" {
+test "renderWalk closed element calls open only" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
@@ -146,7 +105,7 @@ test "renderWalk closed element calls open and close" {
     var r = TraceRenderer.init(testing.allocator);
     defer r.deinit();
     try renderWalk(&r, tree);
-    try testing.expectEqualStrings("<br></br>", r.result());
+    try testing.expectEqualStrings("<br>", r.result());
 }
 
 test "renderWalk fragment is transparent" {
@@ -194,7 +153,7 @@ test "renderWalk boolean attr" {
     var r = TraceRenderer.init(testing.allocator);
     defer r.deinit();
     try renderWalk(&r, tree);
-    try testing.expectEqualStrings("<input type=\"checkbox\" checked></input>", r.result());
+    try testing.expectEqualStrings("<input type=\"checkbox\" checked>", r.result());
 }
 
 test "renderWalk mixed content" {
