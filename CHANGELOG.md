@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] — 2026-03-06
+
+### Breaking Changes
+
+- **`Element` gains `closed: bool` field** — void/self-closing elements created via `closedElement()` now have `closed = true`. `renderWalk` calls `elementOpen` only for closed elements — `elementClose` is no longer called. Renderers that relied on receiving both callbacks for void elements must be updated.
+
+### Features
+
+- **`TreeBuilder.Error`** — named error set (`ExtraClose`, `UnclosedElement`) for use in downstream function signatures.
+- **`TreeBuilder.reset()`** — clear all state while retaining allocated capacity, enabling builder reuse without a deinit/init cycle.
+
+### Other
+
+- `TraceRenderer` moved to dedicated `test_util.zig`, eliminating duplication across test modules.
+- `isOptionalAttrSlice` made private — was unnecessarily `pub`.
+- `root.zig` added to build test list (was missing).
+- Improved doc comments on `buildAttrs`, `renderWalk`, and `attr`.
+
 ## [0.6.0] — 2026-03-05
 
 ### Features
