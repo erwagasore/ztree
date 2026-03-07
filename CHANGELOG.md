@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] — 2026-03-06
+
+### Features
+
+- **`TreeBuilder.addNode(node)`** — append a pre-built `Node` into the builder at the current nesting level. Enables injecting nodes from sub-parsers, caches, or externally constructed trees.
+
+### Other
+
+- Deduplicate `close()` and `popRaw()` via shared private `popFrame()` method, eliminating repeated frame-popping logic.
+
 ## [0.7.0] — 2026-03-06
 
 ### Breaking Changes
