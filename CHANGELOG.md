@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0] — 2026-03-08
+
+### Breaking Changes
+
+- **`elementOpen` now returns `WalkAction`** — renderers must update `elementOpen` from `!void` to `!WalkAction`. Return `.@"continue"` for the previous behaviour (recurse children, call `elementClose`). Return `.skip_children` to handle an element entirely within `elementOpen` — no child recursion, no `elementClose` call.
+
+### Features
+
+- **`WalkAction` enum** — renderer-controlled traversal for `renderWalk`. Simple wrapper elements (bold, headings) return `.@"continue"` and get free traversal. Complex elements (tables, code blocks) return `.skip_children` and handle children directly from the `Element` struct. Makes `renderWalk` truly format-agnostic — Markdown, JSON, Ziggy, and other non-HTML renderers no longer need to buffer or reconstruct subtrees.
+
 ## [0.9.0] — 2026-03-06
 
 ### Features
