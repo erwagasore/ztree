@@ -198,11 +198,14 @@ try element(a, "li", .{
     .@"aria-disabled" = if (disabled) "true" else null,
 }, .{text(label)})
 
-// Runtime attrs via []const Attr or []const ?Attr slice
-try element(a, "a", &[_]?Attr{
+// Tuple of Attr/?Attr — runtime keys + conditional attrs
+try element(a, "a", .{
     attr("href", url),
     if (external) attr("target", "_blank") else null,
 }, .{text("Link")})
+
+// Runtime attrs via []const Attr or []const ?Attr slice
+try element(a, "ul", runtime_attrs_slice, .{text("dynamic")})
 ```
 
 #### `closedElement`

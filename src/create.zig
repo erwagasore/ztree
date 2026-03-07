@@ -34,11 +34,14 @@ pub fn none() Node {
 
 /// Build an element node.
 ///
-/// `attrs` — anonymous struct literal whose field names become attribute keys.
-///   Use @"name" for attribute names that are not valid Zig identifiers.
-///   Use {} (void) or null for boolean attributes (rendered as key only).
-///   Use if (cond) "value" else null for conditional attrs — null omits the attr.
-///   Pass a []const Attr slice when attrs are built at runtime.
+/// `attrs` — accepts three forms:
+///   **Struct literal** — field names become attribute keys.
+///     Use @"name" for attribute names that are not valid Zig identifiers.
+///     Use {} (void) or null for boolean attributes (rendered as key only).
+///     Use if (cond) "value" else null for conditional attrs — null omits the attr.
+///   **Tuple of Attr/?Attr** — for runtime keys or mixed static/dynamic attrs.
+///     `.{ attr("href", url), if (ext) attr("target", "_blank") else null }`
+///   **Slice** — `[]const Attr` or `[]const ?Attr` for fully dynamic attrs.
 ///
 /// `children` — tuple literal whose items become child nodes.
 ///   Pass a []const Node slice when children are built in a loop.
@@ -47,6 +50,7 @@ pub fn none() Node {
 ///   try element(a, "div", .{ .@"hx-get" = url }, arena_kids)
 ///   try element(a, "input", .{ .type = "checkbox", .checked = {} }, .{})
 ///   try element(a, "li", .{ .@"aria-disabled" = if (off) "true" else null }, .{})
+///   try element(a, "a", .{ attr("href", url), if (ext) attr("target", "_blank") else null }, .{})
 ///
 pub fn element(a: Allocator, tag: []const u8, attrs: anytype, children: anytype) !Node {
     return .{ .element = .{
@@ -91,15 +95,70 @@ fn isOptionalAttrSlice(comptime T: type) bool {
     return ci == .array and ci.array.child == ?Attr; // *const [N]?Attr
 }
 
-/// Convert attrs (struct literal, `[]const Attr`, or `[]const ?Attr`) into a
-/// `[]const Attr` slice. When struct fields contain optional values that resolve
-/// to `null`, the allocated buffer may have unused trailing capacity — harmless
-/// with arena allocators (recommended).
+/// Convert attrs into a `[]const Attr` slice. Accepts:
+///
+///   - **Named struct literal** — field names become attr keys.
+///     `.{ .class = "btn", .disabled = if (off) "true" else null }`
+///
+///   - **Tuple of `Attr` / `?Attr`** — each element is an attr value.
+///     `.{ attr("class", "btn"), if (off) attr("disabled", null) else null }`
+///
+///   - **`[]const Attr`** — passthrough.
+///
+///   - **`[]const ?Attr`** — filters out nulls.
+///
+/// When optional values resolve to `null`, the allocated buffer may have
+/// unused trailing capacity — harmless with arena allocators (recommended).
 pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
     const T = @TypeOf(attrs);
     switch (@typeInfo(T)) {
         .@"struct" => |s| {
             if (s.fields.len == 0) return &.{};
+
+            // Tuple of Attr/?Attr — collect values, skip nulls.
+            // Bare null (@TypeOf(null)) is accepted for comptime-known
+            // false conditions: `if (false) attr(...) else null`.
+            if (s.is_tuple) {
+                inline for (s.fields) |f| {
+                    const valid = f.type == Attr or f.type == ?Attr or @typeInfo(f.type) == .null;
+                    if (!valid) {
+                        @compileError("tuple attrs must contain Attr or ?Attr values, got " ++ @typeName(f.type));
+                    }
+                }
+                var count: usize = 0;
+                inline for (s.fields) |f| {
+                    const val = @field(attrs, f.name);
+                    switch (@typeInfo(@TypeOf(val))) {
+                        .null => {},
+                        .optional => {
+                            if (val != null) count += 1;
+                        },
+                        else => count += 1,
+                    }
+                }
+                if (count == 0) return &.{};
+                const buf = try a.alloc(Attr, count);
+                var i: usize = 0;
+                inline for (s.fields) |f| {
+                    const val = @field(attrs, f.name);
+                    switch (@typeInfo(@TypeOf(val))) {
+                        .null => {},
+                        .optional => {
+                            if (val) |v| {
+                                buf[i] = v;
+                                i += 1;
+                            }
+                        },
+                        else => {
+                            buf[i] = val;
+                            i += 1;
+                        },
+                    }
+                }
+                return buf;
+            }
+
+            // Named struct — field names become attr keys.
             const buf = try a.alloc(Attr, s.fields.len);
             var count: usize = 0;
             inline for (s.fields) |f| {
@@ -386,6 +445,98 @@ test "element with []const ?Attr skips nulls" {
     try testing.expectEqual(2, n.element.attrs.len);
     try testing.expectEqualStrings("type",    n.element.attrs[0].key);
     try testing.expectEqualStrings("checked", n.element.attrs[1].key);
+}
+
+// -- tuple attrs --
+
+test "tuple of Attr values" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const n = try element(arena.allocator(), "a", .{
+        attr("class", "btn"),
+        attr("href", "/"),
+    }, .{text("Home")});
+    try testing.expectEqual(2, n.element.attrs.len);
+    try testing.expectEqualStrings("class", n.element.attrs[0].key);
+    try testing.expectEqualStrings("btn", n.element.attrs[0].value.?);
+    try testing.expectEqualStrings("href", n.element.attrs[1].key);
+    try testing.expectEqualStrings("/", n.element.attrs[1].value.?);
+}
+
+test "tuple of ?Attr skips nulls" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const checked = true;
+    const disabled = false;
+    const n = try closedElement(arena.allocator(), "input", .{
+        attr("type", "checkbox"),
+        if (checked) attr("checked", null) else null,
+        if (disabled) attr("disabled", null) else null,
+    });
+    try testing.expectEqual(2, n.element.attrs.len);
+    try testing.expectEqualStrings("type", n.element.attrs[0].key);
+    try testing.expectEqualStrings("checked", n.element.attrs[1].key);
+    try testing.expectEqual(null, n.element.attrs[1].value);
+}
+
+test "tuple with all nulls returns empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const show = false;
+    const n = try element(arena.allocator(), "div", .{
+        if (show) attr("class", "visible") else null,
+    }, .{});
+    try testing.expectEqual(0, n.element.attrs.len);
+}
+
+test "tuple with boolean attr" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const n = try closedElement(arena.allocator(), "input", .{
+        attr("type", "text"),
+        attr("required", null),
+    });
+    try testing.expectEqual(2, n.element.attrs.len);
+    try testing.expectEqualStrings("required", n.element.attrs[1].key);
+    try testing.expectEqual(null, n.element.attrs[1].value);
+}
+
+test "tuple with runtime key" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const key: []const u8 = "data-id";
+    const val: []const u8 = "42";
+    const n = try element(arena.allocator(), "div", .{
+        attr("class", "item"),
+        attr(key, val),
+    }, .{});
+    try testing.expectEqual(2, n.element.attrs.len);
+    try testing.expectEqualStrings("data-id", n.element.attrs[1].key);
+    try testing.expectEqualStrings("42", n.element.attrs[1].value.?);
+}
+
+test "tuple attrs work with TreeBuilder" {
+    const tree_builder = @import("tree_builder.zig");
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var b = tree_builder.TreeBuilder.init(arena.allocator());
+
+    const active = true;
+    try b.open("div", .{
+        attr("class", "card"),
+        if (active) attr("data-active", "true") else null,
+    });
+    try b.close();
+
+    const n = try b.finish();
+    try testing.expectEqual(2, n.element.attrs.len);
+    try testing.expectEqualStrings("class", n.element.attrs[0].key);
+    try testing.expectEqualStrings("data-active", n.element.attrs[1].key);
 }
 
 // -- nested elements --
