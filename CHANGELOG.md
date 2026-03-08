@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] — 2026-03-08
+
+### Features
+
+- Add `Walker` type and `walker()` factory for type-erased re-entrant tree traversal — lets `.skip_children` handlers walk subtrees through the same rendering pipeline without forcing `anyerror` annotations on renderer methods.
+
 ## [1.0.0] — 2026-03-08
 
 ### Breaking Changes
