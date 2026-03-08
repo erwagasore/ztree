@@ -12,6 +12,23 @@ pub const Element = struct {
     /// True for void/self-closing elements created via `closedElement()`.
     /// When true, `renderWalk` calls `elementOpen` only — no children, no `elementClose`.
     closed: bool = false,
+
+    /// Look up an attribute value by key. Returns the value if found,
+    /// `null` if not present or if the attribute is boolean (has no value).
+    pub fn getAttr(self: Element, key: []const u8) ?[]const u8 {
+        for (self.attrs) |a| {
+            if (std.mem.eql(u8, a.key, key)) return a.value;
+        }
+        return null;
+    }
+
+    /// Check whether an attribute is present (with or without a value).
+    pub fn hasAttr(self: Element, key: []const u8) bool {
+        for (self.attrs) |a| {
+            if (std.mem.eql(u8, a.key, key)) return true;
+        }
+        return false;
+    }
 };
 
 pub const Node = union(enum) {
@@ -70,6 +87,49 @@ test "Attr with string value" {
     const a: Attr = .{ .key = "class", .value = "container" };
     try testing.expectEqualStrings("class", a.key);
     try testing.expectEqualStrings("container", a.value.?);
+}
+
+test "Element.getAttr returns value for matching key" {
+    const attrs = [_]Attr{
+        .{ .key = "class", .value = "card" },
+        .{ .key = "id", .value = "main" },
+    };
+    const el: Element = .{ .tag = "div", .attrs = &attrs, .children = &.{} };
+    try testing.expectEqualStrings("card", el.getAttr("class").?);
+    try testing.expectEqualStrings("main", el.getAttr("id").?);
+}
+
+test "Element.getAttr returns null for missing key" {
+    const attrs = [_]Attr{.{ .key = "class", .value = "card" }};
+    const el: Element = .{ .tag = "div", .attrs = &attrs, .children = &.{} };
+    try testing.expectEqual(null, el.getAttr("id"));
+}
+
+test "Element.getAttr returns null for boolean attr" {
+    const attrs = [_]Attr{.{ .key = "disabled", .value = null }};
+    const el: Element = .{ .tag = "input", .attrs = &attrs, .children = &.{} };
+    // Boolean attr has no value — getAttr returns null
+    try testing.expectEqual(null, el.getAttr("disabled"));
+}
+
+test "Element.hasAttr finds value attr" {
+    const attrs = [_]Attr{.{ .key = "href", .value = "/home" }};
+    const el: Element = .{ .tag = "a", .attrs = &attrs, .children = &.{} };
+    try testing.expect(el.hasAttr("href"));
+    try testing.expect(!el.hasAttr("class"));
+}
+
+test "Element.hasAttr finds boolean attr" {
+    const attrs = [_]Attr{.{ .key = "checked", .value = null }};
+    const el: Element = .{ .tag = "input", .attrs = &attrs, .children = &.{} };
+    // hasAttr returns true even for boolean attrs (where getAttr returns null)
+    try testing.expect(el.hasAttr("checked"));
+}
+
+test "Element.getAttr and hasAttr on empty attrs" {
+    const el: Element = .{ .tag = "br", .attrs = &.{}, .children = &.{} };
+    try testing.expectEqual(null, el.getAttr("anything"));
+    try testing.expect(!el.hasAttr("anything"));
 }
 
 test "Node union enum tag switching" {
