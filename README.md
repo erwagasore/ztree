@@ -163,6 +163,28 @@ const Attr = struct {
 };
 ```
 
+#### `Element.getAttr` / `Element.hasAttr`
+
+Attribute lookup methods on `Element`, replacing the linear scan every renderer duplicates.
+
+```zig
+fn getAttr(self: Element, key: []const u8) ?[]const u8
+fn hasAttr(self: Element, key: []const u8) bool
+```
+
+`getAttr` returns the attribute value if found, `null` if missing or boolean (no value).
+`hasAttr` returns `true` if the attribute is present — including boolean attributes.
+
+```zig
+// In a renderer's elementOpen:
+if (el.getAttr("href")) |url| {
+    // render link with url
+}
+if (el.hasAttr("checked")) {
+    // handle checked state
+}
+```
+
 ---
 
 ### Construction functions

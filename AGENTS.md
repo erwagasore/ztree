@@ -34,7 +34,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 - `build.zig.zon` — Zig package manifest
 - `src/` — library source
   - `root.zig` — public API re-exporting all modules
-  - `node.zig` — `Node`, `Element`, `Attr` type definitions
+  - `node.zig` — `Node`, `Element` (with `getAttr`/`hasAttr`), `Attr` type definitions
   - `create.zig` — construction functions: `element()`, `closedElement()`, `fragment()`, `text()`, `raw()`, `attr()`, `none()`; `buildAttrs` with struct literal, tuple, `?Attr` slice, and optional value support
   - `render.zig` — `WalkAction`, `renderWalk()` generic tree walker, `Walker`/`walker()` type-erased re-entrant walker for format library authors (consumer side)
   - `tree_builder.zig` — `TreeBuilder` imperative tree builder for parser authors (producer side)
