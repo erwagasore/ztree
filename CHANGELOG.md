@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] — 2026-03-08
+
+### Features
+
+- Add `Element.getAttr(key)` and `Element.hasAttr(key)` methods for attribute lookup, replacing the linear scan every renderer duplicates.
+
 ## [1.1.0] — 2026-03-08
 
 ### Features
