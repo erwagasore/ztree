@@ -309,6 +309,41 @@ fn onText(self, content: []const u8) !void
 fn onRaw(self, content: []const u8) !void
 ```
 
+#### `Walker` / `walker`
+
+```zig
+const Walker = struct {
+    pub fn walk(self: Walker, node: Node) anyerror!void;
+};
+fn walker(renderer: anytype) Walker
+```
+
+Type-erased re-entrant walker. When a renderer returns `.skip_children` and
+needs to walk subtrees through the same pipeline, calling `renderWalk`
+recursively creates a generic instantiation cycle that Zig's error-set
+inference cannot resolve. `Walker` breaks the cycle with a function pointer.
+
+```zig
+const MdRenderer = struct {
+    w: ztree.Walker = undefined,
+
+    pub fn elementOpen(self: *@This(), el: Element) !WalkAction {
+        if (std.mem.eql(u8, el.tag, "list")) {
+            for (el.children) |child| try self.w.walk(child);
+            return .skip_children;
+        }
+        return .@"continue";
+    }
+    // ... other callbacks
+};
+
+var r = MdRenderer{};
+r.w = ztree.walker(&r);
+try ztree.renderWalk(&r, tree);
+```
+
+Simple renderers that never re-enter can ignore `Walker` entirely.
+
 #### `TreeBuilder`
 
 Imperative tree builder — the producer-side counterpart to `renderWalk`.

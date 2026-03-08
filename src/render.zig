@@ -4,6 +4,69 @@ const node = @import("node.zig");
 const Node = node.Node;
 const Element = node.Element;
 
+/// Type-erased walker for re-entrant tree traversal.
+///
+/// When a renderer uses `.skip_children` to handle an element manually, it often
+/// needs to walk subtrees through the same rendering pipeline. Calling
+/// `renderWalk` from inside a callback creates a generic instantiation cycle
+/// that Zig's error-set inference cannot resolve — forcing `anyerror` annotations
+/// on the renderer.
+///
+/// `Walker` breaks the cycle with a function pointer. `walker.walk(node)` calls
+/// back into `callRenderer` through a concrete `fn(*anyopaque, Node) anyerror!void`,
+/// which Zig doesn't look through for error inference. The renderer's own methods
+/// infer their error sets naturally.
+///
+/// Usage in a renderer:
+///
+///   const Self = @This();
+///   walker: Walker = undefined,
+///
+///   pub fn elementOpen(self: *Self, el: Element) !WalkAction {
+///       if (std.mem.eql(u8, el.tag, "list")) {
+///           for (el.children) |child| try self.walker.walk(child);
+///           return .skip_children;
+///       }
+///       return .@"continue";
+///   }
+///
+/// Wire it up at the call site:
+///
+///   var r = MyRenderer{};
+///   r.walker = walker(&r);
+///   try renderWalk(&r, tree);
+///
+pub const Walker = struct {
+    ctx: *anyopaque,
+    walkFn: *const fn (*anyopaque, Node) anyerror!void,
+
+    /// Walk a node through the renderer this Walker was created from.
+    pub fn walk(self: Walker, n: Node) anyerror!void {
+        return self.walkFn(self.ctx, n);
+    }
+};
+
+/// Create a `Walker` that routes back into the given renderer.
+///
+/// The renderer must satisfy the same duck-typed interface as `renderWalk`
+/// (`elementOpen`, `elementClose`, `onText`, `onRaw`).
+pub fn walker(renderer: anytype) Walker {
+    const Ptr = @TypeOf(renderer);
+    const info = @typeInfo(Ptr);
+    if (info != .pointer or info.pointer.size != .one) {
+        @compileError("walker expects a pointer to a renderer struct, got " ++ @typeName(Ptr));
+    }
+    return .{
+        .ctx = @ptrCast(renderer),
+        .walkFn = struct {
+            fn f(ctx: *anyopaque, n: Node) anyerror!void {
+                const r: Ptr = @ptrCast(@alignCast(ctx));
+                return callRenderer(r, n);
+            }
+        }.f,
+    };
+}
+
 /// Returned by `elementOpen` to control tree traversal.
 ///
 /// - `.@"continue"` — `renderWalk` recurses into children, then calls `elementClose`.
@@ -310,4 +373,119 @@ test "renderWalk closed element ignores skip_children" {
     try renderWalk(&r, tree);
     // closed elements have no children, so [] is empty
     try testing.expectEqualStrings("<pre>[]", r.result());
+}
+
+// ── Walker tests ──────────────────────────────────────────────────────────────
+
+/// Test renderer that uses `Walker` for re-entrant traversal.
+/// Wraps "list" elements manually — walks each child through `walker.walk`
+/// (re-entering `callRenderer`) rather than letting `renderWalk` recurse.
+///
+/// This exercises the exact pattern that breaks without type erasure:
+/// elementOpen → renderList → walker.walk → callRenderer → elementOpen …
+const ReentrantRenderer = struct {
+    buf: std.ArrayList(u8),
+    gpa: Allocator,
+    w: Walker,
+
+    fn init(gpa: Allocator) ReentrantRenderer {
+        return .{ .buf = .empty, .gpa = gpa, .w = undefined };
+    }
+
+    fn deinit(self: *ReentrantRenderer) void {
+        self.buf.deinit(self.gpa);
+    }
+
+    fn result(self: *ReentrantRenderer) []const u8 {
+        return self.buf.items;
+    }
+
+    fn append(self: *ReentrantRenderer, s: []const u8) !void {
+        try self.buf.appendSlice(self.gpa, s);
+    }
+
+    /// Re-entrant: walks children through the type-erased Walker.
+    fn renderList(self: *ReentrantRenderer, el: Element) !void {
+        try self.append("{list:");
+        for (el.children) |child| {
+            try self.w.walk(child);
+        }
+        try self.append("}");
+    }
+
+    pub fn elementOpen(self: *ReentrantRenderer, el: Element) !WalkAction {
+        if (std.mem.eql(u8, el.tag, "list")) {
+            try self.renderList(el);
+            return .skip_children;
+        }
+        try self.append("<");
+        try self.append(el.tag);
+        try self.append(">");
+        return .@"continue";
+    }
+
+    pub fn elementClose(self: *ReentrantRenderer, el: Element) !void {
+        try self.append("</");
+        try self.append(el.tag);
+        try self.append(">");
+    }
+
+    pub fn onText(self: *ReentrantRenderer, content: []const u8) !void {
+        try self.append(content);
+    }
+
+    pub fn onRaw(self: *ReentrantRenderer, content: []const u8) !void {
+        try self.append(content);
+    }
+};
+
+test "walker re-entrant traversal" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // <div><list><item>A</item><item>B</item></list></div>
+    const tree = try element(a, "div", .{}, .{
+        try element(a, "list", .{}, .{
+            try element(a, "item", .{}, .{text("A")}),
+            try element(a, "item", .{}, .{text("B")}),
+        }),
+    });
+
+    var r = ReentrantRenderer.init(testing.allocator);
+    defer r.deinit();
+    r.w = walker(&r);
+    try renderWalk(&r, tree);
+    // "list" handled manually via walker re-entry; children get normal traversal
+    try testing.expectEqualStrings("<div>{list:<item>A</item><item>B</item>}</div>", r.result());
+}
+
+test "walker re-entrant nested lists" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    // Nested: <list><list><item>X</item></list></list>
+    const tree = try element(a, "list", .{}, .{
+        try element(a, "list", .{}, .{
+            try element(a, "item", .{}, .{text("X")}),
+        }),
+    });
+
+    var r = ReentrantRenderer.init(testing.allocator);
+    defer r.deinit();
+    r.w = walker(&r);
+    try renderWalk(&r, tree);
+    // Outer list re-enters, inner list re-enters again — two levels of type-erased recursion
+    try testing.expectEqualStrings("{list:{list:<item>X</item>}}", r.result());
+}
+
+test "walker with text and raw nodes" {
+    // Walker handles all node types, not just elements
+    var r = ReentrantRenderer.init(testing.allocator);
+    defer r.deinit();
+    r.w = walker(&r);
+    try r.w.walk(text("hello"));
+    try r.w.walk(raw("&amp;"));
+    try testing.expectEqualStrings("hello&amp;", r.result());
 }
