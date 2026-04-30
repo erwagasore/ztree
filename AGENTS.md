@@ -57,7 +57,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/).
 
 - **Entry point**: `src/root.zig` — public API re-exporting all modules.
 - **Domain**: format-agnostic document tree library for Zig. Provides `Node`/`Element`/`Attr` types, construction functions, tree traversal via `renderWalk` (consumer side), and imperative tree construction via `TreeBuilder` (producer side).
-- **Language**: Zig (0.15.x). Zero dependencies beyond `std`.
+- **Language**: Zig (0.16.x). Zero dependencies beyond `std`.
 - **Examples**: see format library repos (ztree-html, ztree-md) for usage examples.
 
 ## Design principles

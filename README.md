@@ -12,6 +12,8 @@ Renderer packages walk the tree and produce output:
 
 ## Install
 
+Requires Zig 0.16.0 or newer.
+
 Add ztree to your `build.zig.zon`:
 
 ```bash
@@ -198,8 +200,9 @@ Leaf constructors (`text`, `raw`, `none`, `attr`) are pure and need no allocator
 fn element(a: Allocator, tag: []const u8, attrs: anytype, children: anytype) !Node
 ```
 
-Build an element node. Attrs can be a struct literal or a `[]const Attr` slice.
-Children can be a tuple or a `[]const Node` slice.
+Build an element node. Attrs can be a struct literal, tuple of `Attr`/`?Attr`, or a `[]const Attr` / `[]const ?Attr` slice. Children can be a tuple or a `[]const Node` slice.
+
+Tuple/struct inputs are copied into allocator-owned slices. Slice inputs are borrowed/passed through, except `[]const ?Attr` attrs, which are filtered into a new allocator-owned `[]const Attr` slice. Borrowed slices must outlive the tree.
 
 ```zig
 // Struct attrs — field names become attribute keys
@@ -410,7 +413,7 @@ Methods:
 | `addNode(node)` | Append a pre-built `Node` (from a sub-parser, cache, etc.). |
 | `finish()` | Return root node. Returns `error.UnclosedElement` if elements remain open. |
 | `depth()` | Current nesting depth. |
-| `reset()` | Clear all state, retaining capacity for reuse. |
+| `reset()` | Clear scratch state, retaining capacity for reuse. Does not free tree-owned allocations. |
 
 Finish behaviour:
 - Zero root nodes → empty fragment (`none()`).

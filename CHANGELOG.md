@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Require Zig 0.16.0 or newer.
+- Improve allocation behaviour for named struct attrs by allocating the exact returned slice length.
+- Harden `TreeBuilder` mutations by reserving capacity before appending and documenting reset/borrowed-slice ownership.
+
 ## [1.2.0] — 2026-03-08
 
 ### Features
