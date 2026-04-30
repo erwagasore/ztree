@@ -73,8 +73,13 @@ pub const TreeBuilder = struct {
         self.frames.deinit(self.allocator);
     }
 
-    /// Clear all state, retaining allocated capacity for reuse.
-    /// Only useful with non-arena allocators — with arena, just init a new builder.
+    /// Clear scratch state, retaining allocated capacity for reuse.
+    ///
+    /// This does not free any tree-owned allocations already produced by the
+    /// builder, nor attrs allocated for currently open frames. With an arena,
+    /// that is usually fine: reset/reuse the scratch buffers, then free the
+    /// whole arena when the tree is no longer needed. With non-arena allocators,
+    /// callers remain responsible for any tree data they keep or abandon.
     pub fn reset(self: *TreeBuilder) void {
         self.nodes.clearRetainingCapacity();
         self.frames.clearRetainingCapacity();
@@ -87,9 +92,11 @@ pub const TreeBuilder = struct {
     /// `attrs` accepts the same types as `element()`: struct literal,
     /// `[]const Attr`, or `[]const ?Attr`.
     pub fn open(self: *TreeBuilder, tag: []const u8, attrs: anytype) !void {
-        try self.frames.append(self.allocator, .{
+        try self.frames.ensureUnusedCapacity(self.allocator, 1);
+        const built_attrs = try create.buildAttrs(self.allocator, attrs);
+        self.frames.appendAssumeCapacity(.{
             .tag = tag,
-            .attrs = try create.buildAttrs(self.allocator, attrs),
+            .attrs = built_attrs,
             .children_start = self.nodes.items.len,
         });
     }
@@ -99,8 +106,9 @@ pub const TreeBuilder = struct {
     ///
     /// Returns `error.ExtraClose` if no element is open.
     pub fn close(self: *TreeBuilder) !void {
+        try self.nodes.ensureUnusedCapacity(self.allocator, 1);
         const f = try self.popFrame();
-        try self.nodes.append(self.allocator, .{
+        self.nodes.appendAssumeCapacity(.{
             .element = .{
                 .tag = f.tag,
                 .attrs = f.attrs,
@@ -125,7 +133,9 @@ pub const TreeBuilder = struct {
     /// Shared frame-popping logic for `close()` and `popRaw()`.
     /// Pops the top frame, finalises its children, and returns the result.
     fn popFrame(self: *TreeBuilder) !PopResult {
-        const frame = self.frames.pop() orelse return error.ExtraClose;
+        if (self.frames.items.len == 0) return error.ExtraClose;
+
+        const frame = self.frames.items[self.frames.items.len - 1];
         const start = frame.children_start;
         const child_nodes = self.nodes.items[start..];
 
@@ -137,6 +147,7 @@ pub const TreeBuilder = struct {
         }
 
         self.nodes.shrinkRetainingCapacity(start);
+        self.frames.shrinkRetainingCapacity(self.frames.items.len - 1);
 
         return .{
             .tag = frame.tag,
@@ -147,22 +158,26 @@ pub const TreeBuilder = struct {
 
     /// Append a text node. The renderer escapes its content.
     pub fn text(self: *TreeBuilder, content: []const u8) !void {
-        try self.nodes.append(self.allocator, .{ .text = content });
+        try self.nodes.ensureUnusedCapacity(self.allocator, 1);
+        self.nodes.appendAssumeCapacity(.{ .text = content });
     }
 
     /// Append a raw node. The renderer passes content through as-is.
     pub fn raw(self: *TreeBuilder, content: []const u8) !void {
-        try self.nodes.append(self.allocator, .{ .raw = content });
+        try self.nodes.ensureUnusedCapacity(self.allocator, 1);
+        self.nodes.appendAssumeCapacity(.{ .raw = content });
     }
 
     /// Append a void/self-closing element (no children).
     ///
     /// `attrs` accepts the same types as `open()`.
     pub fn closedElement(self: *TreeBuilder, tag: []const u8, attrs: anytype) !void {
-        try self.nodes.append(self.allocator, .{
+        try self.nodes.ensureUnusedCapacity(self.allocator, 1);
+        const built_attrs = try create.buildAttrs(self.allocator, attrs);
+        self.nodes.appendAssumeCapacity(.{
             .element = .{
                 .tag = tag,
-                .attrs = try create.buildAttrs(self.allocator, attrs),
+                .attrs = built_attrs,
                 .children = &.{},
                 .closed = true,
             },
@@ -172,7 +187,8 @@ pub const TreeBuilder = struct {
     /// Append a pre-built node. Useful when injecting a node produced by
     /// a sub-parser, cache, or any other source.
     pub fn addNode(self: *TreeBuilder, node: Node) !void {
-        try self.nodes.append(self.allocator, node);
+        try self.nodes.ensureUnusedCapacity(self.allocator, 1);
+        self.nodes.appendAssumeCapacity(node);
     }
 
     /// Finalise the tree and return the root node.

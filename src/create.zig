@@ -1,9 +1,9 @@
 const std = @import("std");
 const node = @import("node.zig");
 
-pub const Node    = node.Node;
+pub const Node = node.Node;
 pub const Element = node.Element;
-pub const Attr    = node.Attr;
+pub const Attr = node.Attr;
 
 const Allocator = std.mem.Allocator;
 
@@ -42,9 +42,11 @@ pub fn none() Node {
 ///   **Tuple of Attr/?Attr** — for runtime keys or mixed static/dynamic attrs.
 ///     `.{ attr("href", url), if (ext) attr("target", "_blank") else null }`
 ///   **Slice** — `[]const Attr` or `[]const ?Attr` for fully dynamic attrs.
+///     Slice inputs are borrowed/passed through; they must outlive the tree.
 ///
 /// `children` — tuple literal whose items become child nodes.
 ///   Pass a []const Node slice when children are built in a loop.
+///   Slice inputs are borrowed/passed through; they must outlive the tree.
 ///
 ///   try element(a, "a", .{ .class = "btn", .href = "/" }, .{ text("Home") })
 ///   try element(a, "div", .{ .@"hx-get" = url }, arena_kids)
@@ -54,8 +56,8 @@ pub fn none() Node {
 ///
 pub fn element(a: Allocator, tag: []const u8, attrs: anytype, children: anytype) !Node {
     return .{ .element = .{
-        .tag      = tag,
-        .attrs    = try buildAttrs(a, attrs),
+        .tag = tag,
+        .attrs = try buildAttrs(a, attrs),
         .children = try buildChildren(a, children),
     } };
 }
@@ -68,10 +70,10 @@ pub fn element(a: Allocator, tag: []const u8, attrs: anytype, children: anytype)
 ///
 pub fn closedElement(a: Allocator, tag: []const u8, attrs: anytype) !Node {
     return .{ .element = .{
-        .tag      = tag,
-        .attrs    = try buildAttrs(a, attrs),
+        .tag = tag,
+        .attrs = try buildAttrs(a, attrs),
         .children = &.{},
-        .closed   = true,
+        .closed = true,
     } };
 }
 
@@ -107,8 +109,9 @@ fn isOptionalAttrSlice(comptime T: type) bool {
 ///
 ///   - **`[]const ?Attr`** — filters out nulls.
 ///
-/// When optional values resolve to `null`, the allocated buffer may have
-/// unused trailing capacity — harmless with arena allocators (recommended).
+/// Struct and tuple inputs are copied into allocator-owned slices.
+/// Slice inputs are borrowed/passed through, except `[]const ?Attr` which is
+/// filtered into a new allocator-owned `[]const Attr` slice.
 pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
     const T = @TypeOf(attrs);
     switch (@typeInfo(T)) {
@@ -159,39 +162,56 @@ pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
             }
 
             // Named struct — field names become attr keys.
-            const buf = try a.alloc(Attr, s.fields.len);
             var count: usize = 0;
             inline for (s.fields) |f| {
                 const val = @field(attrs, f.name);
                 switch (@typeInfo(@TypeOf(val))) {
+                    .optional => {
+                        if (val != null) count += 1;
+                    },
+                    else => count += 1,
+                }
+            }
+            if (count == 0) return &.{};
+
+            const buf = try a.alloc(Attr, count);
+            var i: usize = 0;
+            inline for (s.fields) |f| {
+                const val = @field(attrs, f.name);
+                switch (@typeInfo(@TypeOf(val))) {
                     .void, .null => {
-                        buf[count] = .{ .key = f.name, .value = null };
-                        count += 1;
+                        buf[i] = .{ .key = f.name, .value = null };
+                        i += 1;
                     },
                     .optional => {
                         if (val) |v| {
-                            buf[count] = .{ .key = f.name, .value = @as([]const u8, v) };
-                            count += 1;
+                            buf[i] = .{ .key = f.name, .value = @as([]const u8, v) };
+                            i += 1;
                         }
                     },
                     else => {
-                        buf[count] = .{ .key = f.name, .value = @as([]const u8, val) };
-                        count += 1;
+                        buf[i] = .{ .key = f.name, .value = @as([]const u8, val) };
+                        i += 1;
                     },
                 }
             }
-            return buf[0..count];
+            return buf;
         },
         .pointer => {
             // []const ?Attr / *const [N]?Attr — skip nulls
             if (comptime isOptionalAttrSlice(T)) {
                 const src: []const ?Attr = attrs;
                 var count: usize = 0;
-                for (src) |x| if (x != null) { count += 1; };
+                for (src) |x| if (x != null) {
+                    count += 1;
+                };
                 if (count == 0) return &.{};
                 const buf = try a.alloc(Attr, count);
                 var i: usize = 0;
-                for (src) |x| if (x) |v| { buf[i] = v; i += 1; };
+                for (src) |x| if (x) |v| {
+                    buf[i] = v;
+                    i += 1;
+                };
                 return buf;
             }
             return @as([]const Attr, attrs); // []const Attr / *const [N]Attr passthrough
@@ -266,10 +286,10 @@ test "closedElement with attrs struct" {
     const n = try closedElement(a, "img", .{ .src = "photo.jpg", .alt = "photo" });
     try testing.expectEqualStrings("img", n.element.tag);
     try testing.expectEqual(2, n.element.attrs.len);
-    try testing.expectEqualStrings("src",       n.element.attrs[0].key);
+    try testing.expectEqualStrings("src", n.element.attrs[0].key);
     try testing.expectEqualStrings("photo.jpg", n.element.attrs[0].value.?);
-    try testing.expectEqualStrings("alt",       n.element.attrs[1].key);
-    try testing.expectEqualStrings("photo",     n.element.attrs[1].value.?);
+    try testing.expectEqualStrings("alt", n.element.attrs[1].key);
+    try testing.expectEqualStrings("photo", n.element.attrs[1].value.?);
     try testing.expectEqual(0, n.element.children.len);
 }
 
@@ -309,13 +329,13 @@ test "element with attrs struct and children tuple" {
     defer arena.deinit();
     const a = arena.allocator();
 
-    const n = try element(a, "a", .{ .class = "btn", .href = "/" }, .{ text("Home") });
+    const n = try element(a, "a", .{ .class = "btn", .href = "/" }, .{text("Home")});
     try testing.expectEqualStrings("a", n.element.tag);
     try testing.expectEqual(2, n.element.attrs.len);
     try testing.expectEqualStrings("class", n.element.attrs[0].key);
-    try testing.expectEqualStrings("btn",   n.element.attrs[0].value.?);
-    try testing.expectEqualStrings("href",  n.element.attrs[1].key);
-    try testing.expectEqualStrings("/",     n.element.attrs[1].value.?);
+    try testing.expectEqualStrings("btn", n.element.attrs[0].value.?);
+    try testing.expectEqualStrings("href", n.element.attrs[1].key);
+    try testing.expectEqualStrings("/", n.element.attrs[1].value.?);
     try testing.expectEqual(1, n.element.children.len);
     try testing.expectEqualStrings("Home", n.element.children[0].text);
 }
@@ -325,7 +345,7 @@ test "element non-identifier attr name" {
     defer arena.deinit();
 
     const n = try element(arena.allocator(), "div", .{ .@"hx-get" = "/api", .@"aria-label" = "region" }, .{});
-    try testing.expectEqualStrings("hx-get",    n.element.attrs[0].key);
+    try testing.expectEqualStrings("hx-get", n.element.attrs[0].key);
     try testing.expectEqualStrings("aria-label", n.element.attrs[1].key);
 }
 
@@ -407,6 +427,14 @@ test "struct attr with optional value omits when null" {
     try testing.expectEqualStrings("class", n.element.attrs[0].key);
 }
 
+test "struct attr with omitted optional can be freed by exact returned length" {
+    const n = try buildWithCond(testing.allocator, false);
+    defer testing.allocator.free(n.element.attrs);
+
+    try testing.expectEqual(1, n.element.attrs.len);
+    try testing.expectEqualStrings("class", n.element.attrs[0].key);
+}
+
 /// Helper — keeps the condition runtime so Zig infers ?[]const u8, not @TypeOf(null).
 fn buildWithCond(a: std.mem.Allocator, cond: bool) !Node {
     return element(a, "div", .{
@@ -443,7 +471,7 @@ test "element with []const ?Attr skips nulls" {
         if (disabled) attr("disabled", null) else null,
     });
     try testing.expectEqual(2, n.element.attrs.len);
-    try testing.expectEqualStrings("type",    n.element.attrs[0].key);
+    try testing.expectEqualStrings("type", n.element.attrs[0].key);
     try testing.expectEqualStrings("checked", n.element.attrs[1].key);
 }
 
@@ -556,7 +584,7 @@ test "nested elements returned from a function" {
 
 fn buildCard(a: Allocator, name: []const u8, href: []const u8) !Node {
     return element(a, "article", .{ .class = "card" }, .{
-        try element(a, "a", .{ .href = href }, .{ text(name) }),
+        try element(a, "a", .{ .href = href }, .{text(name)}),
     });
 }
 
@@ -570,7 +598,7 @@ test "loop-built children via slice passthrough" {
     const data = [_][]const u8{ "one", "two", "three" };
     const items = try a.alloc(Node, data.len);
     for (data, 0..) |item, i| {
-        items[i] = try element(a, "li", .{}, .{ text(item) });
+        items[i] = try element(a, "li", .{}, .{text(item)});
     }
 
     const list = try element(a, "ul", .{ .class = "list" }, items);
