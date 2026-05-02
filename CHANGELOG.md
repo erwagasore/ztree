@@ -2,11 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.1.0] — 2026-05-02
 
 ### Features
 
-- Add `TypedWalker(Error)` and `typedWalker(Error, renderer)` for re-entrant renderers that want to preserve a narrow error set.
+- Add `TypedWalker(Error)` and `typedWalker(Error, renderer)` for re-entrant renderers that need to preserve a narrow error set.
 
 ### Fixes
 
@@ -18,7 +18,9 @@ All notable changes to this project will be documented in this file.
 - Allow `walker` and `typedWalker` to accept const renderer pointers.
 - Improve generic input validation for attrs, children, and renderer pointers.
 - Add allocation-failure coverage for constructors and `TreeBuilder` operations.
+- Align tests with Zig package-root test practice.
 - Add `check` and `test-all` build steps for local validation.
+- Document ownership rules.
 
 ## [2.0.0] — 2026-04-30
 
