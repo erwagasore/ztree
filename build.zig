@@ -19,28 +19,35 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
-    // Tests — run tests from each source module
+    // Tests — run the package root, which imports all module tests.
     const test_step = b.step("test", "Run unit tests");
+    addTestRun(b, test_step, target, optimize);
 
-    const test_files = [_][]const u8{
-        "src/root.zig",
-        "src/node.zig",
-        "src/create.zig",
-        "src/render.zig",
-        "src/tree_builder.zig",
-    };
+    const check_step = b.step("check", "Run checks");
+    check_step.dependOn(test_step);
 
-    for (test_files) |test_file| {
-        const test_mod = b.createModule(.{
-            .root_source_file = b.path(test_file),
-            .target = target,
-            .optimize = optimize,
-        });
-
-        const t = b.addTest(.{
-            .root_module = test_mod,
-        });
-        const run_t = b.addRunArtifact(t);
-        test_step.dependOn(&run_t.step);
+    const test_all_step = b.step("test-all", "Run unit tests in Debug, ReleaseSafe, and ReleaseFast");
+    const modes = [_]std.builtin.OptimizeMode{ .Debug, .ReleaseSafe, .ReleaseFast };
+    for (modes) |mode| {
+        addTestRun(b, test_all_step, target, mode);
     }
+}
+
+fn addTestRun(
+    b: *std.Build,
+    step: *std.Build.Step,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) void {
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const t = b.addTest(.{
+        .root_module = test_mod,
+    });
+    const run_t = b.addRunArtifact(t);
+    step.dependOn(&run_t.step);
 }

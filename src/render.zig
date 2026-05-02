@@ -13,9 +13,9 @@ const Element = node.Element;
 /// on the renderer.
 ///
 /// `Walker` breaks the cycle with a function pointer. `walker.walk(node)` calls
-/// back into `callRenderer` through a concrete `fn(*anyopaque, Node) anyerror!void`,
-/// which Zig doesn't look through for error inference. The renderer's own methods
-/// infer their error sets naturally.
+/// back into `callRenderer` through a concrete function pointer, which Zig
+/// doesn't look through for error inference. The renderer's own methods infer
+/// their error sets naturally.
 ///
 /// Usage in a renderer:
 ///
@@ -36,31 +36,61 @@ const Element = node.Element;
 ///   r.walker = walker(&r);
 ///   try renderWalk(&r, tree);
 ///
-pub const Walker = struct {
-    ctx: *anyopaque,
-    walkFn: *const fn (*anyopaque, Node) anyerror!void,
+pub const Walker = TypedWalker(anyerror);
 
-    /// Walk a node through the renderer this Walker was created from.
-    pub fn walk(self: Walker, n: Node) anyerror!void {
-        return self.walkFn(self.ctx, n);
+/// Type-erased re-entrant walker with a caller-chosen error set.
+///
+/// Use `TypedWalker(Error)` / `typedWalker(Error, &renderer)` when a renderer
+/// wants to preserve a narrow public error set across re-entrant traversal.
+pub fn TypedWalker(comptime Error: type) type {
+    if (@typeInfo(Error) != .error_set) {
+        @compileError("TypedWalker expects an error set type, got " ++ @typeName(Error));
     }
-};
+
+    return struct {
+        ctx: *const anyopaque,
+        walkFn: *const fn (*const anyopaque, Node) Error!void,
+
+        /// Walk a node through the renderer this Walker was created from.
+        pub fn walk(self: @This(), n: Node) Error!void {
+            return self.walkFn(self.ctx, n);
+        }
+    };
+}
 
 /// Create a `Walker` that routes back into the given renderer.
 ///
 /// The renderer must satisfy the same duck-typed interface as `renderWalk`
 /// (`elementOpen`, `elementClose`, `onText`, `onRaw`).
 pub fn walker(renderer: anytype) Walker {
+    return makeWalker(anyerror, renderer, "walker");
+}
+
+/// Create a `TypedWalker(Error)` that routes back into the given renderer.
+///
+/// The renderer callbacks' error sets must be coercible to `Error`.
+pub fn typedWalker(comptime Error: type, renderer: anytype) TypedWalker(Error) {
+    return makeWalker(Error, renderer, "typedWalker");
+}
+
+fn makeWalker(
+    comptime Error: type,
+    renderer: anytype,
+    comptime api_name: []const u8,
+) TypedWalker(Error) {
     const Ptr = @TypeOf(renderer);
     const info = @typeInfo(Ptr);
-    if (info != .pointer or info.pointer.size != .one) {
-        @compileError("walker expects a pointer to a renderer struct, got " ++ @typeName(Ptr));
+    if (info != .pointer or info.pointer.size != .one or @typeInfo(info.pointer.child) != .@"struct") {
+        @compileError(api_name ++ " expects a pointer to a renderer struct, got " ++ @typeName(Ptr));
     }
     return .{
         .ctx = @ptrCast(renderer),
         .walkFn = struct {
-            fn f(ctx: *anyopaque, n: Node) anyerror!void {
-                const r: Ptr = @ptrCast(@alignCast(ctx));
+            fn f(ctx: *const anyopaque, n: Node) Error!void {
+                const r: Ptr = if (info.pointer.is_const)
+                    @ptrCast(@alignCast(ctx))
+                else
+                    @ptrCast(@alignCast(@constCast(ctx)));
                 return callRenderer(r, n);
             }
         }.f,
@@ -107,10 +137,10 @@ pub const WalkAction = enum { @"continue", skip_children };
 ///   var r = MyHtmlRenderer.init(allocator);
 ///   try renderWalk(&r, tree);
 ///
-pub fn renderWalk(renderer: anytype, n: Node) @TypeOf(callRenderer(renderer, n)) {
+pub fn renderWalk(renderer: anytype, n: Node) !void {
     const R = @TypeOf(renderer);
     const info = @typeInfo(R);
-    if (info != .pointer or info.pointer.size != .one) {
+    if (info != .pointer or info.pointer.size != .one or @typeInfo(info.pointer.child) != .@"struct") {
         @compileError("renderWalk expects a pointer to a renderer struct, got " ++ @typeName(R));
     }
     return callRenderer(renderer, n);
@@ -488,4 +518,68 @@ test "walker with text and raw nodes" {
     try r.w.walk(text("hello"));
     try r.w.walk(raw("&amp;"));
     try testing.expectEqualStrings("hello&amp;", r.result());
+}
+
+const TypedWalkerError = error{Marker};
+
+const TypedWalkerRenderer = struct {
+    w: TypedWalker(TypedWalkerError) = undefined,
+    seen: usize = 0,
+
+    pub fn elementOpen(self: *TypedWalkerRenderer, el: Element) TypedWalkerError!WalkAction {
+        if (std.mem.eql(u8, el.tag, "skip")) {
+            for (el.children) |child| try self.w.walk(child);
+            return .skip_children;
+        }
+        return .@"continue";
+    }
+
+    pub fn elementClose(_: *TypedWalkerRenderer, _: Element) TypedWalkerError!void {}
+
+    pub fn onText(self: *TypedWalkerRenderer, content: []const u8) TypedWalkerError!void {
+        if (std.mem.eql(u8, content, "boom")) return error.Marker;
+        self.seen += 1;
+    }
+
+    pub fn onRaw(self: *TypedWalkerRenderer, _: []const u8) TypedWalkerError!void {
+        self.seen += 1;
+    }
+};
+
+test "typedWalker preserves caller-selected error set" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const tree = try element(a, "skip", .{}, .{
+        text("ok"),
+        raw("raw"),
+    });
+
+    var r: TypedWalkerRenderer = .{};
+    r.w = typedWalker(TypedWalkerError, &r);
+    try renderWalk(&r, tree);
+    try testing.expectEqual(@as(usize, 2), r.seen);
+
+    try testing.expectError(error.Marker, r.w.walk(text("boom")));
+}
+
+const ConstWalkerRenderer = struct {
+    pub fn elementOpen(_: *const ConstWalkerRenderer, _: Element) !WalkAction {
+        return .@"continue";
+    }
+
+    pub fn elementClose(_: *const ConstWalkerRenderer, _: Element) !void {}
+
+    pub fn onText(_: *const ConstWalkerRenderer, _: []const u8) !void {}
+
+    pub fn onRaw(_: *const ConstWalkerRenderer, _: []const u8) !void {}
+};
+
+test "walker supports const renderer pointers" {
+    const r: ConstWalkerRenderer = .{};
+    const w = walker(&r);
+
+    try w.walk(text("hello"));
+    try renderWalk(&r, raw("raw"));
 }

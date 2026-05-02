@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Features
+
+- Add `TypedWalker(Error)` and `typedWalker(Error, renderer)` for re-entrant renderers that want to preserve a narrow error set.
+
+### Fixes
+
+- Free element attrs if child allocation fails during `element()` construction under non-arena allocators.
+- Return `error.ExtraClose` from `TreeBuilder.close()` before attempting allocation when no element is open.
+
+### Other
+
+- Allow `walker` and `typedWalker` to accept const renderer pointers.
+- Improve generic input validation for attrs, children, and renderer pointers.
+- Add allocation-failure coverage for constructors and `TreeBuilder` operations.
+- Add `check` and `test-all` build steps for local validation.
+
 ## [2.0.0] — 2026-04-30
 
 ### Breaking Changes
