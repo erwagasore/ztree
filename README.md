@@ -194,6 +194,16 @@ if (el.hasAttr("checked")) {
 `element`, `closedElement`, and `fragment` take an `Allocator` and return `!Node`.
 Leaf constructors (`text`, `raw`, `none`, `attr`) are pure and need no allocator.
 
+Ownership rules:
+
+- `text`, `raw`, `none`, and `attr` allocate nothing.
+- Struct/tuple attrs and tuple children are copied into allocator-owned slices.
+- `[]const Attr` and `[]const Node` inputs are borrowed and must outlive the tree.
+- `[]const ?Attr` inputs are filtered into an allocator-owned `[]const Attr` slice.
+- ztree does not provide a general tree destructor because a tree can mix owned
+  and borrowed slices. Arena allocation is the intended ownership model: allocate
+  the tree, render/use it, then free the arena in one shot.
+
 #### `element`
 
 ```zig
@@ -337,16 +347,18 @@ fn onRaw(self, content: []const u8) !void
 #### `Walker` / `walker`
 
 ```zig
-const Walker = struct {
-    pub fn walk(self: Walker, node: Node) anyerror!void;
-};
+const Walker = TypedWalker(anyerror);
+fn TypedWalker(comptime Error: type) type
 fn walker(renderer: anytype) Walker
+fn typedWalker(comptime Error: type, renderer: anytype) TypedWalker(Error)
 ```
 
 Type-erased re-entrant walker. When a renderer returns `.skip_children` and
 needs to walk subtrees through the same pipeline, calling `renderWalk`
 recursively creates a generic instantiation cycle that Zig's error-set
 inference cannot resolve. `Walker` breaks the cycle with a function pointer.
+Use `typedWalker` when a renderer wants to preserve a narrow public error set.
+`walker` and `typedWalker` accept mutable or const renderer pointers.
 
 ```zig
 const MdRenderer = struct {
@@ -419,6 +431,10 @@ Finish behaviour:
 - Zero root nodes → empty fragment (`none()`).
 - One root node → that node directly.
 - Multiple root nodes → fragment wrapping all roots.
+
+`finish()` is non-consuming: it returns a view of the current builder state and
+does not clear the builder. Call `reset()` before reusing the builder for another
+tree.
 
 ---
 

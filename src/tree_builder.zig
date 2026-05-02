@@ -106,6 +106,8 @@ pub const TreeBuilder = struct {
     ///
     /// Returns `error.ExtraClose` if no element is open.
     pub fn close(self: *TreeBuilder) !void {
+        if (self.frames.items.len == 0) return error.ExtraClose;
+
         try self.nodes.ensureUnusedCapacity(self.allocator, 1);
         const f = try self.popFrame();
         self.nodes.appendAssumeCapacity(.{
@@ -479,6 +481,14 @@ test "close without open returns ExtraClose" {
     try testing.expectError(error.ExtraClose, b.close());
 }
 
+test "close without open checks state before allocating" {
+    var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    var b = TreeBuilder.init(failing.allocator());
+    defer b.deinit();
+
+    try testing.expectError(error.ExtraClose, b.close());
+}
+
 test "finish with unclosed element returns UnclosedElement" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -834,4 +844,49 @@ test "round-trip: document with attrs and nesting" {
         "<html lang=\"en\"><head><title>Test</title><meta charset=\"utf-8\"></head><body><h1>Hello</h1></body></html>",
         built_html,
     );
+}
+
+fn treeBuilderCloseAllocFailureImpl(a: Allocator) !void {
+    var b = TreeBuilder.init(a);
+    defer b.deinit();
+
+    try b.open("p", .{});
+    try b.text("hello");
+    try b.close();
+
+    const n = try b.finish();
+    defer a.free(n.element.children);
+}
+
+test "TreeBuilder.close handles allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, treeBuilderCloseAllocFailureImpl, .{});
+}
+
+fn treeBuilderFinishAllocFailureImpl(a: Allocator) !void {
+    var b = TreeBuilder.init(a);
+    defer b.deinit();
+
+    try b.text("a");
+    try b.text("b");
+
+    const n = try b.finish();
+    defer a.free(n.fragment);
+}
+
+test "TreeBuilder.finish handles allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, treeBuilderFinishAllocFailureImpl, .{});
+}
+
+fn treeBuilderClosedElementAllocFailureImpl(a: Allocator) !void {
+    var b = TreeBuilder.init(a);
+    defer b.deinit();
+
+    try b.closedElement("img", .{ .src = "/logo.png", .alt = "Logo" });
+
+    const n = try b.finish();
+    defer a.free(n.element.attrs);
+}
+
+test "TreeBuilder.closedElement handles allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, treeBuilderClosedElementAllocFailureImpl, .{});
 }

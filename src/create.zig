@@ -55,10 +55,16 @@ pub fn none() Node {
 ///   try element(a, "a", .{ attr("href", url), if (ext) attr("target", "_blank") else null }, .{})
 ///
 pub fn element(a: Allocator, tag: []const u8, attrs: anytype, children: anytype) !Node {
+    const built_attrs = try buildAttrsOwned(a, attrs);
+    errdefer if (built_attrs.owned) a.free(built_attrs.items);
+
+    const built_children = try buildChildrenOwned(a, children);
+    errdefer if (built_children.owned) a.free(built_children.items);
+
     return .{ .element = .{
         .tag = tag,
-        .attrs = try buildAttrs(a, attrs),
-        .children = try buildChildren(a, children),
+        .attrs = built_attrs.items,
+        .children = built_children.items,
     } };
 }
 
@@ -88,13 +94,38 @@ pub fn fragment(a: Allocator, children: anytype) !Node {
 
 // ── Private builders ──────────────────────────────────────────────────────────
 
-fn isOptionalAttrSlice(comptime T: type) bool {
+const BuiltAttrs = struct {
+    items: []const Attr,
+    owned: bool,
+};
+
+const BuiltChildren = struct {
+    items: []const Node,
+    owned: bool,
+};
+
+fn isSliceOrArrayPtrOf(comptime T: type, comptime Child: type) bool {
     const info = @typeInfo(T);
     if (info != .pointer) return false;
-    const child = info.pointer.child;
-    if (child == ?Attr) return true; // []const ?Attr
-    const ci = @typeInfo(child);
-    return ci == .array and ci.array.child == ?Attr; // *const [N]?Attr
+
+    const p = info.pointer;
+    return switch (p.size) {
+        .slice => p.child == Child,
+        .one => switch (@typeInfo(p.child)) {
+            .array => |arr| arr.child == Child,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn isPointerToEmptyStruct(comptime T: type) bool {
+    const info = @typeInfo(T);
+    if (info != .pointer or info.pointer.size != .one) return false;
+    return switch (@typeInfo(info.pointer.child)) {
+        .@"struct" => |s| s.fields.len == 0,
+        else => false,
+    };
 }
 
 /// Convert attrs into a `[]const Attr` slice. Accepts:
@@ -113,10 +144,14 @@ fn isOptionalAttrSlice(comptime T: type) bool {
 /// Slice inputs are borrowed/passed through, except `[]const ?Attr` which is
 /// filtered into a new allocator-owned `[]const Attr` slice.
 pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
+    return (try buildAttrsOwned(a, attrs)).items;
+}
+
+fn buildAttrsOwned(a: Allocator, attrs: anytype) !BuiltAttrs {
     const T = @TypeOf(attrs);
     switch (@typeInfo(T)) {
         .@"struct" => |s| {
-            if (s.fields.len == 0) return &.{};
+            if (s.fields.len == 0) return .{ .items = &.{}, .owned = false };
 
             // Tuple of Attr/?Attr — collect values, skip nulls.
             // Bare null (@TypeOf(null)) is accepted for comptime-known
@@ -139,7 +174,7 @@ pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
                         else => count += 1,
                     }
                 }
-                if (count == 0) return &.{};
+                if (count == 0) return .{ .items = &.{}, .owned = false };
                 const buf = try a.alloc(Attr, count);
                 var i: usize = 0;
                 inline for (s.fields) |f| {
@@ -158,7 +193,7 @@ pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
                         },
                     }
                 }
-                return buf;
+                return .{ .items = buf, .owned = true };
             }
 
             // Named struct — field names become attr keys.
@@ -172,7 +207,7 @@ pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
                     else => count += 1,
                 }
             }
-            if (count == 0) return &.{};
+            if (count == 0) return .{ .items = &.{}, .owned = false };
 
             const buf = try a.alloc(Attr, count);
             var i: usize = 0;
@@ -195,43 +230,67 @@ pub fn buildAttrs(a: Allocator, attrs: anytype) ![]const Attr {
                     },
                 }
             }
-            return buf;
+            return .{ .items = buf, .owned = true };
         },
         .pointer => {
+            if (comptime isPointerToEmptyStruct(T)) {
+                return .{ .items = &.{}, .owned = false };
+            }
+
             // []const ?Attr / *const [N]?Attr — skip nulls
-            if (comptime isOptionalAttrSlice(T)) {
+            if (comptime isSliceOrArrayPtrOf(T, ?Attr)) {
                 const src: []const ?Attr = attrs;
                 var count: usize = 0;
                 for (src) |x| if (x != null) {
                     count += 1;
                 };
-                if (count == 0) return &.{};
+                if (count == 0) return .{ .items = &.{}, .owned = false };
                 const buf = try a.alloc(Attr, count);
                 var i: usize = 0;
                 for (src) |x| if (x) |v| {
                     buf[i] = v;
                     i += 1;
                 };
-                return buf;
+                return .{ .items = buf, .owned = true };
             }
-            return @as([]const Attr, attrs); // []const Attr / *const [N]Attr passthrough
+            if (comptime isSliceOrArrayPtrOf(T, Attr)) {
+                return .{ .items = @as([]const Attr, attrs), .owned = false };
+            }
+            @compileError("attrs pointer must be []const Attr, []const ?Attr, or pointer to an array of Attr/?Attr, got " ++ @typeName(T));
         },
         else => @compileError("attrs must be an anonymous struct literal .{} or []const Attr"),
     }
 }
 
 fn buildChildren(a: Allocator, children: anytype) ![]const Node {
+    return (try buildChildrenOwned(a, children)).items;
+}
+
+fn buildChildrenOwned(a: Allocator, children: anytype) !BuiltChildren {
     const T = @TypeOf(children);
     switch (@typeInfo(T)) {
         .@"struct" => |s| {
-            if (s.fields.len == 0) return &.{};
+            if (s.fields.len == 0) return .{ .items = &.{}, .owned = false };
+            inline for (s.fields) |f| {
+                if (f.type != Node) {
+                    @compileError("children tuple must contain Node values, got " ++ @typeName(f.type));
+                }
+            }
             const buf = try a.alloc(Node, s.fields.len);
             inline for (s.fields, 0..) |f, i| {
                 buf[i] = @field(children, f.name);
             }
-            return buf;
+            return .{ .items = buf, .owned = true };
         },
-        .pointer => return @as([]const Node, children), // []const Node / *const [N]Node passthrough
+        .pointer => {
+            if (comptime isPointerToEmptyStruct(T)) {
+                return .{ .items = &.{}, .owned = false };
+            }
+            if (comptime isSliceOrArrayPtrOf(T, Node)) {
+                return .{ .items = @as([]const Node, children), .owned = false };
+            }
+            @compileError("children pointer must be []const Node or pointer to an array of Node, got " ++ @typeName(T));
+        },
         else => @compileError("children must be a tuple literal .{} or []const Node"),
     }
 }
@@ -319,6 +378,16 @@ test "element empty attrs and children" {
     defer arena.deinit();
 
     const n = try element(arena.allocator(), "div", .{}, .{});
+    try testing.expectEqualStrings("div", n.element.tag);
+    try testing.expectEqual(0, n.element.attrs.len);
+    try testing.expectEqual(0, n.element.children.len);
+}
+
+test "element accepts empty slice literals" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const n = try element(arena.allocator(), "div", &.{}, &.{});
     try testing.expectEqualStrings("div", n.element.tag);
     try testing.expectEqual(0, n.element.attrs.len);
     try testing.expectEqual(0, n.element.children.len);
@@ -619,4 +688,32 @@ test "leaf constructors work at comptime" {
         const n = none();
         if (n.fragment.len != 0) @compileError("none failed");
     }
+}
+
+fn elementAllocFailureImpl(a: Allocator) !void {
+    const n = try element(a, "div", .{ .class = "card" }, .{text("hello")});
+    defer a.free(n.element.children);
+    defer a.free(n.element.attrs);
+}
+
+test "element frees attrs if child allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, elementAllocFailureImpl, .{});
+}
+
+fn closedElementAllocFailureImpl(a: Allocator) !void {
+    const n = try closedElement(a, "img", .{ .src = "/logo.png", .alt = "Logo" });
+    defer a.free(n.element.attrs);
+}
+
+test "closedElement handles allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, closedElementAllocFailureImpl, .{});
+}
+
+fn fragmentAllocFailureImpl(a: Allocator) !void {
+    const n = try fragment(a, .{ text("a"), text("b") });
+    defer a.free(n.fragment);
+}
+
+test "fragment handles allocation failures" {
+    try testing.checkAllAllocationFailures(testing.allocator, fragmentAllocFailureImpl, .{});
 }

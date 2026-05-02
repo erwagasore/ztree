@@ -24,11 +24,20 @@ pub const fragment = create.fragment;
 pub const renderWalk = render.renderWalk;
 pub const WalkAction = render.WalkAction;
 pub const Walker = render.Walker;
+pub const TypedWalker = render.TypedWalker;
 pub const walker = render.walker;
+pub const typedWalker = render.typedWalker;
 
 // Tree construction (producer side)
 pub const TreeBuilder = tree_builder.TreeBuilder;
 
 test {
-    @import("std").testing.refAllDecls(@This());
+    const std = @import("std");
+
+    std.testing.refAllDecls(@This());
+
+    _ = @import("node.zig");
+    _ = @import("create.zig");
+    _ = @import("render.zig");
+    _ = @import("tree_builder.zig");
 }
